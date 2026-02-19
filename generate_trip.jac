@@ -7,6 +7,7 @@ node Trip {
         title: str,
         start: str,
         end: str,
+        num_people: int,
         budget: float,
         activities: list[Activity];
 }
@@ -23,14 +24,26 @@ The total cost of all activities should be within the trip budget.
 obj Activity {
     has id: str,
         title: str,
+        type: ActivityType,
         start: str,
-        end: str,
+        duration: float,
         cost: float;
 }
 
+enum ActivityType {
+    TRAVEL, 
+    LODGING, 
+    ACTIVE, 
+    FOOD, 
+    SHOPPING, 
+    SIGHTSEEING, 
+    ENTERTAINMENT, 
+    OTHER
+}
+
 sem Activity.start = "Date and time of start of activity";
-sem Activity.end = "Date and time of end of activity";
-sem Trip.budget = "Cost of activity in USD";
+sem Activity.duration = "Duration of activity in hours";
+sem Activity.cost = "Cost of activity in USD";
 
 def generate_trip(request: str) -> Trip by llm();
 
@@ -51,7 +64,9 @@ with entry {
     for activity in trip.activities {
         print();
         print(f"Activity: {activity.title}");
-        print(f"Duration: {activity.start} to {activity.end}");
+        print(f"Type: {activity.type}");
+        print(f"Start: {activity.start}");
+        print(f"Duration: {activity.duration}");
         print(f"Cost: {activity.cost}");
     }
 }
