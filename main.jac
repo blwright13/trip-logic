@@ -1,4 +1,5 @@
 import from byllm.lib { Model }
+import from uuid { uuid4 }
 
 glob llm = Model(model_name="gemini/gemini-2.5-flash");
 
@@ -47,6 +48,61 @@ sem Activity.cost = "Cost of activity in USD";
 
 def generate_trip(request: str) -> Trip by llm();
 
+walker add_trip {
+    has request: str;
+
+    can create with Root entry {
+        trip = generate_trip(request);
+        root ++> Trip(
+            id = str(uuid4()),
+            title = trip.title,
+            start = trip.start,
+            end = trip.end,
+            num_people = trip.num_people,
+            budget = trip.budget,
+            activities = [Activity(
+                id = str(uuid4()),
+                title = activity.title,
+                type = activity.type,
+                start = activity.start,
+                duration = activity.duration,
+                cost = activity.cost
+            ) for activity in trip.activities]
+        );
+    }
+}
+
+walker listTrips {
+    has trips: list[Trip] = [];
+    
+    can search with Root entry {
+        visit[-->];
+    }
+
+    can collect with Trip entry {
+        self.trips.append({
+            "id": here.id,
+            "title": here.title,
+            "start": here.start,
+            "end": here.end,
+            "num_people": here.num_people,
+            "budget": here.budget,
+            "activities": [{
+                "id": activity.id,
+                "title": activity.title,
+                "type": activity.type,
+                "start": activity.start,
+                "duration": activity.duration,
+                "cost": activity.cost
+            } for activity in here.activities]
+        });
+    }
+
+    can list with Root exit {
+        report self.trips;
+    }
+}
+
 with entry {
     request = """
     I would like to take a trip to Florida, from June 5 to June 7 2026.
@@ -55,18 +111,9 @@ with entry {
     Our budget is $3000.
     """;
 
-    trip = generate_trip(request);
+    root spawn add_trip(request);
 
-    print(f"Title: {trip.title}");
-    print(f"Duration: {trip.start} to {trip.end}");
-    print(f"Budget {trip.budget}");
+    trips = root spawn listTrips();
 
-    for activity in trip.activities {
-        print();
-        print(f"Activity: {activity.title}");
-        print(f"Type: {activity.type}");
-        print(f"Start: {activity.start}");
-        print(f"Duration: {activity.duration}");
-        print(f"Cost: {activity.cost}");
-    }
+    print(trips.reports[0]);
 }

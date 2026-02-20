@@ -1,7 +1,7 @@
 [project]
-name = "myapp"
+name = "trip-logic"
 version = "1.0.0"
-description = "Jac client application: myapp"
+description = "Jac client application: trip-logic"
 entry-point = "main.jac"
 
 [dependencies]
