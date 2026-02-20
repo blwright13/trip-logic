@@ -48,6 +48,8 @@ sem Activity.cost = "Cost of activity in USD";
 
 def generate_trip(request: str) -> Trip by llm();
 
+def generate_activity(request: str) -> Activity by llm();
+
 walker:pub add_trip {
     has request: str;
 
@@ -122,7 +124,7 @@ walker:pub deleteTrip {
 walker:pub editTrip {
     has trip_id: str,
         trip: dict[str, any];
-    
+
     can search with Root entry {
         visit[-->];
     }
@@ -134,8 +136,58 @@ walker:pub editTrip {
             here.end = str(trip["end"]);
             here.num_people = int(trip["num_people"]);
             here.budget = float(trip["budget"]);
-            
+
             report {"edited": self.trip_id};
+            disengage;
+        }
+    }
+}
+
+walker:pub addActivity {
+    has trip_id: str,
+        request: str;
+    
+    can search with Root entry {
+        visit[-->];
+    }
+
+    can create with Trip entry {
+        if here.id == trip_id {
+            activity = generate_activity(request);
+            new_activity = Activity(
+                id = str(uuid4()),
+                title = activity.title,
+                type = activity.type,
+                start = activity.start,
+                duration = activity.duration,
+                cost = activity.cost
+            );
+            here.activities.append(new_activity);
+            report {
+                "id": new_activity.id,
+                "title": new_activity.title,
+                "type": new_activity.type,
+                "start": new_activity.start,
+                "duration": new_activity.duration,
+                "cost": new_activity.cost
+            };
+            disengage;
+        }
+    }
+}
+
+walker:pub deleteActivity {
+    has trip_id: str,
+        activity_id: str;
+    
+    can search with Root entry {
+        visit[-->];
+    }
+    
+    can delete with Trip entry {
+        if here.id == trip_id {
+            here.activities = [activity for activity in here.activities if activity.id != activity_id];
+            report {"deleted": activity_id};
             disengage;
         }
     }
