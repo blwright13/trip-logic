@@ -48,7 +48,7 @@ sem Activity.cost = "Cost of activity in USD";
 
 def generate_trip(request: str) -> Trip by llm();
 
-walker add_trip {
+walker:pub add_trip {
     has request: str;
 
     can create with Root entry {
@@ -72,7 +72,7 @@ walker add_trip {
     }
 }
 
-walker listTrips {
+walker:pub listTrips {
     has trips: list[Trip] = [];
     
     can search with Root entry {
@@ -100,6 +100,44 @@ walker listTrips {
 
     can list with Root exit {
         report self.trips;
+    }
+}
+
+walker:pub deleteTrip {
+    has trip_id: str;
+
+    can search with Root entry {
+        visit[-->];
+    }
+
+    can delete with Trip entry {
+        if here.id == trip_id {
+            del here;
+            report {"deleted": self.trip_id};
+            disengage;
+        }
+    }
+}
+
+walker:pub editTrip {
+    has trip_id: str,
+        trip: dict[str, any];
+    
+    can search with Root entry {
+        visit[-->];
+    }
+
+    can edit with Trip entry {
+        if here.id == trip_id {
+            here.title = str(trip["title"]);
+            here.start = str(trip["start"]);
+            here.end = str(trip["end"]);
+            here.num_people = int(trip["num_people"]);
+            here.budget = float(trip["budget"]);
+            
+            report {"edited": self.trip_id};
+            disengage;
+        }
     }
 }
 
