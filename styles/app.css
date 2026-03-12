@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 220 20% 14%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 14%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 14%;
+
+    --primary: 16 85% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 14%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 16 85% 96%;
+    --accent-foreground: 16 85% 40%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 14% 92%;
+    --input: 220 14% 92%;
+    --ring: 16 85% 58%;
+
+    --radius: 0.75rem;
+
+    --chat-bg: 0 0% 100%;
+    --chat-user: 16 85% 58%;
+    --chat-user-foreground: 0 0% 100%;
+    --chat-ai: 220 14% 96%;
+    --chat-ai-foreground: 220 20% 14%;
+    --chip: 16 85% 96%;
+    --chip-foreground: 16 85% 40%;
+    --chip-hover: 16 85% 90%;
+    --budget-track: 220 14% 92%;
+    --budget-fill: 16 85% 58%;
+    --budget-over: 0 84% 60%;
+    --timeline-line: 220 14% 88%;
+    --day-tab: 0 0% 100%;
+    --day-tab-active: 16 85% 58%;
+    --day-tab-active-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 220 20% 8%;
+    --foreground: 0 0% 95%;
+    --card: 220 20% 11%;
+    --card-foreground: 0 0% 95%;
+    --popover: 220 20% 11%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 16 85% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 16%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 220 14% 16%;
+    --muted-foreground: 220 10% 60%;
+    --accent: 16 50% 15%;
+    --accent-foreground: 16 85% 70%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 16 85% 58%;
+    --chat-bg: 220 20% 11%;
+    --chat-user: 16 85% 58%;
+    --chat-user-foreground: 0 0% 100%;
+    --chat-ai: 220 14% 16%;
+    --chat-ai-foreground: 0 0% 95%;
+    --chip: 16 50% 15%;
+    --chip-foreground: 16 85% 70%;
+    --chip-hover: 16 50% 20%;
+    --budget-track: 220 14% 18%;
+    --budget-fill: 16 85% 58%;
+    --budget-over: 0 84% 50%;
+    --timeline-line: 220 14% 20%;
+    --day-tab: 220 20% 14%;
+    --day-tab-active: 16 85% 58%;
+    --day-tab-active-foreground: 0 0% 100%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+}
+
+/* Utility classes for colors using CSS variables */
+.bg-background { background-color: hsl(var(--background)); }
+.bg-foreground { background-color: hsl(var(--foreground)); }
+.bg-card { background-color: hsl(var(--card)); }
+.bg-primary { background-color: hsl(var(--primary)); }
+.bg-secondary { background-color: hsl(var(--secondary)); }
+.bg-muted { background-color: hsl(var(--muted)); }
+.bg-accent { background-color: hsl(var(--accent)); }
+.bg-destructive { background-color: hsl(var(--destructive)); }
+.bg-chat { background-color: hsl(var(--chat-bg)); }
+.bg-chat-user { background-color: hsl(var(--chat-user)); }
+.bg-chat-ai { background-color: hsl(var(--chat-ai)); }
+.bg-chip { background-color: hsl(var(--chip)); }
+.bg-chip-hover { background-color: hsl(var(--chip-hover)); }
+
+.text-foreground { color: hsl(var(--foreground)); }
+.text-muted-foreground { color: hsl(var(--muted-foreground)); }
+.text-primary { color: hsl(var(--primary)); }
+.text-primary-foreground { color: hsl(var(--primary-foreground)); }
+.text-secondary-foreground { color: hsl(var(--secondary-foreground)); }
+.text-accent-foreground { color: hsl(var(--accent-foreground)); }
+.text-chat-user-foreground { color: hsl(var(--chat-user-foreground)); }
+.text-chat-ai-foreground { color: hsl(var(--chat-ai-foreground)); }
+.text-chip-foreground { color: hsl(var(--chip-foreground)); }
+
+.border-border { border-color: hsl(var(--border)); }
+.border-input { border-color: hsl(var(--input)); }
+.border-primary { border-color: hsl(var(--primary)); }
+
+.ring-ring { --tw-ring-color: hsl(var(--ring)); }
+
+/* Button base styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  padding: 0.5rem 1rem;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+/* Avatar styles */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background-color: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+}

@@ -1,3 +1,14 @@
+"""TripLogic - AI-Powered Trip Planning Application."""
+
+cl {
+    import from frontend { app as ClientApp }
+
+    def:pub app -> any {
+        return
+            <ClientApp />;
+    }
+}
+
 import from byllm.lib { Model }
 import from uuid { uuid4 }
 
@@ -10,17 +21,12 @@ node Trip {
         end: str,
         num_people: int,
         budget: float,
-        activities: list[Activity];
+        activities: list;
 }
 
 sem Trip.start = "Date and time of start of trip";
 sem Trip.end = "Date and time of end of trip";
 sem Trip.budget = "Total budget for trip in USD";
-sem Trip.activities = """
-List of activities to do on trip.
-The times should not overlap and should fit within the trip duration.
-The total cost of all activities should be within the trip budget.
-""";
 
 obj Activity {
     has id: str,
@@ -32,13 +38,13 @@ obj Activity {
 }
 
 enum ActivityType {
-    TRAVEL, 
-    LODGING, 
-    ACTIVE, 
-    FOOD, 
-    SHOPPING, 
-    SIGHTSEEING, 
-    ENTERTAINMENT, 
+    TRAVEL,
+    LODGING,
+    ACTIVE,
+    FOOD,
+    SHOPPING,
+    SIGHTSEEING,
+    ENTERTAINMENT,
     OTHER
 }
 
@@ -50,35 +56,32 @@ def generate_trip(request: str) -> Trip by llm();
 
 def generate_activity(request: str) -> Activity by llm();
 
-walker:pub add_trip {
+walker:priv AddTrip {
     has request: str;
 
-    can create with Root entry {
-        trip = generate_trip(request);
-        root ++> Trip(
+    can create with `root entry {
+        trip = generate_trip(self.request);
+        new_trip = here ++> Trip(
             id = str(uuid4()),
             title = trip.title,
             start = trip.start,
             end = trip.end,
             num_people = trip.num_people,
             budget = trip.budget,
-            activities = [Activity(
-                id = str(uuid4()),
-                title = activity.title,
-                type = activity.type,
-                start = activity.start,
-                duration = activity.duration,
-                cost = activity.cost
-            ) for activity in trip.activities]
+            activities = []
         );
+        report {
+            "id": new_trip[0].id,
+            "title": new_trip[0].title
+        };
     }
 }
 
-walker:pub listTrips {
-    has trips: list[Trip] = [];
-    
-    can search with Root entry {
-        visit[-->];
+walker:priv ListTrips {
+    has trips: list = [];
+
+    can search with `root entry {
+        visit [-->];
     }
 
     can collect with Trip entry {
@@ -88,122 +91,26 @@ walker:pub listTrips {
             "start": here.start,
             "end": here.end,
             "num_people": here.num_people,
-            "budget": here.budget,
-            "activities": [{
-                "id": activity.id,
-                "title": activity.title,
-                "type": activity.type,
-                "start": activity.start,
-                "duration": activity.duration,
-                "cost": activity.cost
-            } for activity in here.activities]
+            "budget": here.budget
         });
     }
 
-    can list with Root exit {
+    can list with `root exit {
         report self.trips;
     }
 }
 
-walker:pub deleteTrip {
+walker:priv DeleteTrip {
     has trip_id: str;
 
-    can search with Root entry {
-        visit[-->];
+    can search with `root entry {
+        visit [-->];
     }
 
     can delete with Trip entry {
-        if here.id == trip_id {
+        if here.id == self.trip_id {
             del here;
             report {"deleted": self.trip_id};
-            disengage;
         }
     }
-}
-
-walker:pub editTrip {
-    has trip_id: str,
-        trip: dict[str, any];
-
-    can search with Root entry {
-        visit[-->];
-    }
-
-    can edit with Trip entry {
-        if here.id == trip_id {
-            here.title = str(trip["title"]);
-            here.start = str(trip["start"]);
-            here.end = str(trip["end"]);
-            here.num_people = int(trip["num_people"]);
-            here.budget = float(trip["budget"]);
-
-            report {"edited": self.trip_id};
-            disengage;
-        }
-    }
-}
-
-walker:pub addActivity {
-    has trip_id: str,
-        request: str;
-    
-    can search with Root entry {
-        visit[-->];
-    }
-
-    can create with Trip entry {
-        if here.id == trip_id {
-            activity = generate_activity(request);
-            new_activity = Activity(
-                id = str(uuid4()),
-                title = activity.title,
-                type = activity.type,
-                start = activity.start,
-                duration = activity.duration,
-                cost = activity.cost
-            );
-            here.activities.append(new_activity);
-            report {
-                "id": new_activity.id,
-                "title": new_activity.title,
-                "type": new_activity.type,
-                "start": new_activity.start,
-                "duration": new_activity.duration,
-                "cost": new_activity.cost
-            };
-            disengage;
-        }
-    }
-}
-
-walker:pub deleteActivity {
-    has trip_id: str,
-        activity_id: str;
-    
-    can search with Root entry {
-        visit[-->];
-    }
-    
-    can delete with Trip entry {
-        if here.id == trip_id {
-            here.activities = [activity for activity in here.activities if activity.id != activity_id];
-            report {"deleted": activity_id};
-            disengage;
-        }
-    }
-}
-
-with entry {
-    request = """
-    I would like to take a trip to Florida, from June 5 to June 7 2026.
-    It will be me and one other person on the trip.
-    We like to be active, so outdoor activities are ideal.
-    Our budget is $3000.
-    """;
-
-    root spawn add_trip(request);
-
-    trips = root spawn listTrips();
-
-    print(trips.reports[0]);
 }

@@ -1,13 +1,14 @@
 [project]
 name = "trip-logic"
 version = "1.0.0"
-description = "Jac client application: trip-logic"
+description = "TripLogic - AI-Powered Trip Planning"
 entry-point = "main.jac"
 
 [dependencies]
 
 [dependencies.npm]
 jac-client-node = "1.0.4"
+lucide-react = "^0.462.0"
 
 [dependencies.npm.dev]
 "@jac-client/dev-deps" = "1.0.0"
