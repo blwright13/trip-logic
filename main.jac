@@ -114,3 +114,115 @@ walker:priv DeleteTrip {
         }
     }
 }
+
+walker:priv GetTrip {
+    has trip_id: str;
+
+    can search with `root entry {
+        visit [-->];
+    }
+
+    can get with Trip entry {
+        if here.id == self.trip_id {
+            report {
+                "id": here.id,
+                "title": here.title,
+                "start": here.start,
+                "end": here.end,
+                "num_people": here.num_people,
+                "budget": here.budget,
+                "activities": here.activities
+            };
+        }
+    }
+}
+
+walker:priv UpdateTrip {
+    has trip_id: str;
+    has title: str = "";
+    has start: str = "";
+    has end: str = "";
+    has num_people: int = -1;
+    has budget: float = -1.0;
+
+    can search with `root entry {
+        visit [-->];
+    }
+
+    can update with Trip entry {
+        if here.id == self.trip_id {
+            if self.title != "" {
+                here.title = self.title;
+            }
+            if self.start != "" {
+                here.start = self.start;
+            }
+            if self.end != "" {
+                here.end = self.end;
+            }
+            if self.num_people != -1 {
+                here.num_people = self.num_people;
+            }
+            if self.budget != -1.0 {
+                here.budget = self.budget;
+            }
+            report {
+                "id": here.id,
+                "title": here.title,
+                "start": here.start,
+                "end": here.end,
+                "num_people": here.num_people,
+                "budget": here.budget
+            };
+        }
+    }
+}
+
+walker:priv GetItinerary {
+    has trip_id: str;
+
+    can search with `root entry {
+        visit [-->];
+    }
+
+    can get with Trip entry {
+        if here.id == self.trip_id {
+            # Group activities by day
+            days = {};
+            for activity in here.activities {
+                day_key = activity.start.split("T")[0] if "T" in activity.start else activity.start;
+                if day_key not in days {
+                    days[day_key] = [];
+                }
+                days[day_key].append(activity);
+            }
+            report {
+                "trip_id": here.id,
+                "days": days
+            };
+        }
+    }
+}
+
+walker:priv SendChatMessage {
+    has trip_id: str;
+    has message: str;
+
+    can search with `root entry {
+        visit [-->];
+    }
+
+    can respond with Trip entry {
+        if here.id == self.trip_id {
+            # Generate AI response about the trip
+            prompt = f"The user is planning a trip to {here.title} from {here.start} to {here.end} with a budget of ${here.budget} for {here.num_people} people. They said: {self.message}. Provide a helpful, concise response about their trip.";
+            response = llm(prompt);
+            report {
+                "trip_id": here.id,
+                "user_message": self.message,
+                "ai_response": response,
+                "chips": ["Tell me more", "Update my itinerary", "What else can I do?"]
+            };
+        }
+    }
+}
