@@ -6,6 +6,7 @@ packages/
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .venv/
 venv/
 env/
@@ -22,3 +23,10 @@ node_modules/
 .jac/
 *.session
 *.session.*
+dist/
+
+# Local env and OS files
+.DS_Store
+.env
+backend/.env
+backend/triplogic.db

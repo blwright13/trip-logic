@@ -898,3 +898,26 @@ body {
 .group:hover .group-hover-visible {
     opacity: 1;
 }
+
+/* Typing indicator */
+@keyframes typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.typing-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--muted-foreground);
+    animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-dot-delay-1 {
+    animation-delay: 0.2s;
+}
+
+.typing-dot-delay-2 {
+    animation-delay: 0.4s;
+}
