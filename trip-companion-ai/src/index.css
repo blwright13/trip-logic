@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 220 20% 14%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 14%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 14%;
+
+    --primary: 16 85% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 14%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 16 85% 96%;
+    --accent-foreground: 16 85% 40%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 14% 92%;
+    --input: 220 14% 92%;
+    --ring: 16 85% 58%;
+
+    --radius: 0.75rem;
+
+    --chat-bg: 0 0% 100%;
+    --chat-user: 16 85% 58%;
+    --chat-user-foreground: 0 0% 100%;
+    --chat-ai: 220 14% 96%;
+    --chat-ai-foreground: 220 20% 14%;
+    --chip: 16 85% 96%;
+    --chip-foreground: 16 85% 40%;
+    --chip-hover: 16 85% 90%;
+    --budget-track: 220 14% 92%;
+    --budget-fill: 16 85% 58%;
+    --budget-over: 0 84% 60%;
+    --timeline-line: 220 14% 88%;
+    --day-tab: 0 0% 100%;
+    --day-tab-active: 16 85% 58%;
+    --day-tab-active-foreground: 0 0% 100%;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 220 20% 8%;
+    --foreground: 0 0% 95%;
+    --card: 220 20% 11%;
+    --card-foreground: 0 0% 95%;
+    --popover: 220 20% 11%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 16 85% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 16%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 220 14% 16%;
+    --muted-foreground: 220 10% 60%;
+    --accent: 16 50% 15%;
+    --accent-foreground: 16 85% 70%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 16 85% 58%;
+    --chat-bg: 220 20% 11%;
+    --chat-user: 16 85% 58%;
+    --chat-user-foreground: 0 0% 100%;
+    --chat-ai: 220 14% 16%;
+    --chat-ai-foreground: 0 0% 95%;
+    --chip: 16 50% 15%;
+    --chip-foreground: 16 85% 70%;
+    --chip-hover: 16 50% 20%;
+    --budget-track: 220 14% 18%;
+    --budget-fill: 16 85% 58%;
+    --budget-over: 0 84% 50%;
+    --timeline-line: 220 14% 20%;
+    --day-tab: 220 20% 14%;
+    --day-tab-active: 16 85% 58%;
+    --day-tab-active-foreground: 0 0% 100%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+}
