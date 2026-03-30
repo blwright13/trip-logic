@@ -1,7 +1,5 @@
 import { useState, useRef } from "react";
-import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, ArrowRightLeft, Trash2, Lightbulb } from "lucide-react";
-import { PlanKey, planDescriptions } from "@/data/mockTrip";
-import { toast } from "sonner";
+import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, ArrowRightLeft, Trash2, Lightbulb, Loader2 } from "lucide-react";
 
 export interface Activity {
   id: string;
@@ -23,10 +21,10 @@ interface ItineraryPanelProps {
   selectedDay: number;
   onSelectDay: (day: number) => void;
   totalBudget: number;
-  activePlan: PlanKey;
-  onPlanChange: (plan: PlanKey) => void;
   onReorder: (dayIndex: number, activities: Activity[]) => void;
   onRemoveActivity: (dayIndex: number, activityId: string) => void;
+  onShowAlternatives: (activityId: string) => void;
+  alternativesLoading?: string | null;
 }
 
 const categoryIcons: Record<Activity["category"], typeof Utensils> = {
@@ -51,9 +49,7 @@ const categoryColors: Record<Activity["category"], string> = {
   cafe: "bg-amber-100 text-amber-700",
 };
 
-const plans: PlanKey[] = ["A", "B", "C"];
-
-const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, activePlan, onPlanChange, onReorder, onRemoveActivity }: ItineraryPanelProps) => {
+const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder, onRemoveActivity, onShowAlternatives, alternativesLoading }: ItineraryPanelProps) => {
   const currentDay = days.find((d) => d.day === selectedDay);
   const currentDayIndex = days.findIndex((d) => d.day === selectedDay);
   const totalSpent = days.reduce((sum, d) => sum + d.activities.reduce((s, a) => s + a.cost, 0), 0);
@@ -94,26 +90,6 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, activePla
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Plan Toggle */}
-      <div className="px-4 pt-4 pb-2 border-b border-border">
-        <div className="flex items-center gap-1.5 bg-secondary rounded-xl p-1">
-          {plans.map((p) => (
-            <button
-              key={p}
-              onClick={() => onPlanChange(p)}
-              className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activePlan === p
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Plan {p}
-              <span className="block text-[10px] font-normal opacity-80">{planDescriptions[p]}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Day Tabs */}
       <div className="px-4 pt-3 pb-2 border-b border-border">
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Itinerary</h2>
@@ -189,10 +165,15 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, activePla
                     {/* Quick actions */}
                     <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
-                        onClick={() => toast.info("Finding alternatives for " + activity.name)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-accent text-accent-foreground hover:bg-accent/80 transition-colors"
+                        onClick={() => onShowAlternatives(activity.id)}
+                        disabled={alternativesLoading === activity.id}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-accent text-accent-foreground hover:bg-accent/80 transition-colors disabled:opacity-50"
                       >
-                        <ArrowRightLeft size={10} />
+                        {alternativesLoading === activity.id ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <ArrowRightLeft size={10} />
+                        )}
                         Swap
                       </button>
                       <button
@@ -203,10 +184,15 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, activePla
                         Remove
                       </button>
                       <button
-                        onClick={() => toast.info("Showing alternatives near " + activity.location)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => onShowAlternatives(activity.id)}
+                        disabled={alternativesLoading === activity.id}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
                       >
-                        <Lightbulb size={10} />
+                        {alternativesLoading === activity.id ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <Lightbulb size={10} />
+                        )}
                         Alternatives
                       </button>
                     </div>

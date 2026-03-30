@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Search, MapPin, Calendar, Users, ArrowRight, Plane, Palmtree, Mountain, Building } from "lucide-react";
+import { Search, ArrowRight, Plane, Palmtree, Mountain, Building } from "lucide-react";
 import TopNav from "@/components/TopNav";
 import { Button } from "@/components/ui/button";
+import { useCreateTrip } from "@/hooks/useTrip";
 
 const templates = [
   {
@@ -11,6 +11,7 @@ const templates = [
     subtitle: "5 days · Culture & Food",
     icon: Building,
     color: "bg-accent text-accent-foreground",
+    query: "5 days in Tokyo, Japan with culture and food focus",
   },
   {
     id: 2,
@@ -18,6 +19,7 @@ const templates = [
     subtitle: "7 days · Beach & Wellness",
     icon: Palmtree,
     color: "bg-accent text-accent-foreground",
+    query: "7 days in Bali, Indonesia for beach and wellness",
   },
   {
     id: 3,
@@ -25,6 +27,7 @@ const templates = [
     subtitle: "4 days · Adventure",
     icon: Mountain,
     color: "bg-accent text-accent-foreground",
+    query: "4 days adventure trip in Swiss Alps",
   },
   {
     id: 4,
@@ -32,18 +35,27 @@ const templates = [
     subtitle: "3 days · Romance & Art",
     icon: Plane,
     color: "bg-accent text-accent-foreground",
+    query: "3 days romantic trip to Paris, France with art and culture",
   },
 ];
 
 const Landing = () => {
   const [query, setQuery] = useState("");
-  const navigate = useNavigate();
+  const createTrip = useCreateTrip();
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim()) {
-      navigate("/planner");
+      createTrip.mutate(query.trim());
     }
+  };
+
+  const handleTemplateClick = (templateQuery: string) => {
+    createTrip.mutate(templateQuery);
+  };
+
+  const handleTagClick = (tag: string) => {
+    createTrip.mutate(tag);
   };
 
   return (
@@ -71,10 +83,11 @@ const Landing = () => {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Where do you want to go?"
               className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground outline-none text-base"
+              disabled={createTrip.isPending}
             />
-            <Button type="submit" size="sm" className="shrink-0 gap-1.5">
-              Plan Trip
-              <ArrowRight size={14} />
+            <Button type="submit" size="sm" className="shrink-0 gap-1.5" disabled={createTrip.isPending}>
+              {createTrip.isPending ? "Creating..." : "Plan Trip"}
+              {!createTrip.isPending && <ArrowRight size={14} />}
             </Button>
           </form>
 
@@ -83,8 +96,9 @@ const Landing = () => {
             {["Weekend getaway", "Family vacation", "Solo backpacking", "Honeymoon"].map((tag) => (
               <button
                 key={tag}
-                onClick={() => { setQuery(tag); navigate("/planner"); }}
-                className="px-3 py-1.5 text-xs font-medium rounded-full bg-chip text-chip-foreground hover:bg-chip-hover transition-colors"
+                onClick={() => handleTagClick(tag)}
+                disabled={createTrip.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-full bg-chip text-chip-foreground hover:bg-chip-hover transition-colors disabled:opacity-50"
               >
                 {tag}
               </button>
@@ -101,8 +115,9 @@ const Landing = () => {
             {templates.map((t) => (
               <button
                 key={t.id}
-                onClick={() => navigate("/planner")}
-                className="group flex flex-col items-center gap-3 p-5 rounded-2xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all text-center"
+                onClick={() => handleTemplateClick(t.query)}
+                disabled={createTrip.isPending}
+                className="group flex flex-col items-center gap-3 p-5 rounded-2xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all text-center disabled:opacity-50"
               >
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${t.color}`}>
                   <t.icon size={22} />

@@ -1,61 +1,65 @@
 # TripLogic
 
-AI-powered trip planning application.
+AI-powered trip planning application with FastAPI backend and React frontend.
 
-## Run
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- PostgreSQL (or Supabase)
+- Gemini API key
+
+## Backend Setup
 
 ```bash
-jac serve main.jac
+cd backend
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp ../.env.example .env
+# Edit .env with your credentials
+
+# Run the server
+uvicorn main:app --reload
 ```
 
-## Backend Connection Status
+The API will be available at http://localhost:8000
 
-The frontend is currently **not connected** to backend walkers. All data is hardcoded.
+## Frontend Setup
 
-### What Needs to Be Connected
+```bash
+cd trip-companion-ai
 
-| Feature | Frontend Method | Backend Walker | Status |
-|---------|----------------|----------------|--------|
-| Chat responses | `sendMessage()` | `SendChatMessage` | Not connected |
-| Save trip edits | `saveTrip()` | `UpdateTrip` | Not connected |
-| Load trip | - | `GetTrip` | Not connected |
-| Create trip | - | `AddTrip` | Not connected |
-| Generate itinerary | - | `GetItinerary` | Not connected |
+# Install dependencies
+npm install
 
-### How to Connect
-
-1. Add server imports to `frontend.cl.jac`:
-```jac
-sv import from main {
-    AddTrip, GetTrip, UpdateTrip, ListTrips,
-    SendChatMessage, GetItinerary
-}
+# Run the development server
+npm run dev
 ```
 
-2. Update methods in `frontend.impl.jac` to spawn walkers:
-```jac
-impl app.sendMessage(text: str) -> None {
-    userMsg = {"id": Math.random().toString(), "role": "user", "text": text};
-    chatMessages = chatMessages + [userMsg];
+The frontend will be available at http://localhost:8080
 
-    result = root spawn SendChatMessage(trip_id="current", message=text);
-    if result.reports {
-        response = result.reports[0];
-        aiMsg = {"id": Math.random().toString(), "role": "ai", "text": response.ai_response, "chips": response.chips};
-        chatMessages = chatMessages + [aiMsg];
-    }
-    chatInput = "";
-}
-```
+## API Endpoints
 
-## File Structure
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/trips` | Create trip from natural language |
+| GET | `/api/trips` | List all trips |
+| GET | `/api/trips/{id}` | Get trip with activities |
+| PUT | `/api/trips/{id}` | Update trip metadata |
+| DELETE | `/api/trips/{id}` | Delete trip |
+| POST | `/api/trips/{id}/chat` | Send message, get AI response |
+| GET | `/api/trips/{id}/chat` | Get chat history |
+| GET | `/api/trips/{id}/itinerary` | Activities grouped by day |
 
-```
-trip-logic/
-  main.jac              # Backend walkers
-  frontend.cl.jac       # Main app state + routing
-  frontend.impl.jac     # Method implementations
-  styles.css            # Styles
-  components/           # 11 reusable UI components
-  pages/                # 3 page components
-```
+## Environment Variables
+
+- `GEMINI_API_KEY`: Google Gemini API key for AI features
+- `DATABASE_URL`: PostgreSQL connection string
+- `FRONTEND_URL`: Frontend URL for CORS (default: http://localhost:8080)
