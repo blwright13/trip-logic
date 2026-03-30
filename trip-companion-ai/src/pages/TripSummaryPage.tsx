@@ -1,9 +1,9 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2 } from "lucide-react";
 import TopNav from "@/components/TopNav";
 import { Button } from "@/components/ui/button";
-import { initialTrip, planDays } from "@/data/mockTrip";
+import { useTrip, useItinerary } from "@/hooks/useTrip";
 import type { Activity } from "@/components/ItineraryPanel";
 
 const categoryIcons: Record<Activity["category"], typeof Utensils> = {
@@ -19,8 +19,38 @@ const categoryLabels: Record<Activity["category"], string> = {
 
 const TripSummaryPage = () => {
   const navigate = useNavigate();
-  const days = planDays.A;
-  const trip = initialTrip;
+  const { tripId } = useParams<{ tripId: string }>();
+  const tripIdNum = tripId ? parseInt(tripId, 10) : undefined;
+
+  const { data: tripData, isLoading: tripLoading, error: tripError } = useTrip(tripIdNum);
+  const { data: itineraryData, isLoading: itineraryLoading } = useItinerary(tripIdNum);
+
+  const days = useMemo(() => {
+    if (!itineraryData) return [];
+    return itineraryData.map((day) => ({
+      day: day.day,
+      date: day.date,
+      activities: day.activities.map((a) => ({
+        id: a.id.toString(),
+        name: a.name,
+        time: a.time,
+        cost: a.cost,
+        location: a.location || "",
+        category: a.category,
+      })),
+    }));
+  }, [itineraryData]);
+
+  const trip = useMemo(() => {
+    if (!tripData) return { destination: "", startDate: "", endDate: "", budget: 0, travelers: 0 };
+    return {
+      destination: tripData.title,
+      startDate: tripData.start,
+      endDate: tripData.end,
+      budget: tripData.budget,
+      travelers: tripData.num_people,
+    };
+  }, [tripData]);
 
   const allActivities = useMemo(() => days.flatMap((d) => d.activities), [days]);
   const totalCost = useMemo(() => allActivities.reduce((s, a) => s + a.cost, 0), [allActivities]);
@@ -35,7 +65,7 @@ const TripSummaryPage = () => {
   }, [allActivities]);
 
   const uniqueLocations = useMemo(() => {
-    const locs = [...new Set(allActivities.map((a) => a.location))];
+    const locs = [...new Set(allActivities.map((a) => a.location).filter(Boolean))];
     return locs;
   }, [allActivities]);
 
@@ -58,6 +88,38 @@ const TripSummaryPage = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Loading state
+  if (tripLoading || itineraryLoading) {
+    return (
+      <div className="flex flex-col min-h-screen bg-background">
+        <TopNav />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <p>Loading trip summary...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (tripError || !tripIdNum) {
+    return (
+      <div className="flex flex-col min-h-screen bg-background">
+        <TopNav />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
+            <p>Trip not found</p>
+            <Button variant="outline" onClick={() => navigate("/")}>
+              Go Home
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <TopNav />
@@ -67,7 +129,7 @@ const TripSummaryPage = () => {
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={() => navigate("/planner")}>
+              <Button variant="ghost" size="icon" onClick={() => navigate(`/planner/${tripId}`)}>
                 <ArrowLeft size={18} />
               </Button>
               <div>
@@ -86,26 +148,32 @@ const TripSummaryPage = () => {
           <div className="grid md:grid-cols-3 gap-6">
             {/* Itinerary */}
             <div className="md:col-span-2 space-y-6">
-              {days.map((d) => (
-                <div key={d.day} className="bg-card border border-border rounded-2xl p-5">
-                  <h3 className="font-semibold text-foreground mb-3">
-                    Day {d.day} <span className="text-muted-foreground font-normal">· {d.date}</span>
-                  </h3>
-                  <div className="space-y-2.5">
-                    {d.activities.map((a) => {
-                      const Icon = categoryIcons[a.category];
-                      return (
-                        <div key={a.id} className="flex items-center gap-3 text-sm">
-                          <span className="text-xs text-muted-foreground w-16 shrink-0">{a.time}</span>
-                          <Icon size={14} className="text-primary shrink-0" />
-                          <span className="text-foreground font-medium flex-1 truncate">{a.name}</span>
-                          <span className="text-primary font-semibold">${a.cost}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+              {days.length === 0 ? (
+                <div className="bg-card border border-border rounded-2xl p-5 text-center text-muted-foreground">
+                  No activities planned yet
                 </div>
-              ))}
+              ) : (
+                days.map((d) => (
+                  <div key={d.day} className="bg-card border border-border rounded-2xl p-5">
+                    <h3 className="font-semibold text-foreground mb-3">
+                      Day {d.day} <span className="text-muted-foreground font-normal">· {d.date}</span>
+                    </h3>
+                    <div className="space-y-2.5">
+                      {d.activities.map((a) => {
+                        const Icon = categoryIcons[a.category];
+                        return (
+                          <div key={a.id} className="flex items-center gap-3 text-sm">
+                            <span className="text-xs text-muted-foreground w-16 shrink-0">{a.time}</span>
+                            <Icon size={14} className="text-primary shrink-0" />
+                            <span className="text-foreground font-medium flex-1 truncate">{a.name}</span>
+                            <span className="text-primary font-semibold">${a.cost}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Sidebar: cost breakdown + map */}
