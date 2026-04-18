@@ -9,7 +9,7 @@ import logging
 from collections import Counter
 from typing import Any
 
-from integrations import aviationstack, google_places
+from integrations import aviationstack, google_places, serpapi
 from itinerary_gen import merge_parsed_with_canonical, parse_trip_from_prompt
 from llm import OPENAI_MODEL, llm_configured, openai_client
 from models import Trip
@@ -102,16 +102,28 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "flight_schedule_lookup",
-                "description": "Sample scheduled flights between two IATA airport codes on a date (YYYY-MM-DD). May return limited data on free tier.",
+                "name": "search_flights",
+                "description": (
+                    "Search real available flights between two airports on a date using Google Flights. "
+                    "Returns airline, flight number, departure/arrival times, stops, and price in USD. "
+                    "Optionally filter by airline IATA code (e.g. DL for Delta, AA for American)."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "origin_iata": {"type": "string", "description": "3-letter departure airport code"},
-                        "dest_iata": {"type": "string", "description": "3-letter arrival airport code"},
-                        "flight_date": {"type": "string", "description": "Date YYYY-MM-DD"},
+                        "origin_iata": {"type": "string", "description": "3-letter departure airport code, e.g. DTW"},
+                        "dest_iata": {"type": "string", "description": "3-letter arrival airport code, e.g. CDG"},
+                        "departure_date": {"type": "string", "description": "Departure date YYYY-MM-DD"},
+                        "airline_code": {
+                            "type": "string",
+                            "description": "Optional 2-letter IATA airline code to filter results, e.g. DL, AA, UA",
+                        },
+                        "return_date": {
+                            "type": "string",
+                            "description": "Optional return date YYYY-MM-DD for round-trip search",
+                        },
                     },
-                    "required": ["origin_iata", "dest_iata", "flight_date"],
+                    "required": ["origin_iata", "dest_iata", "departure_date"],
                 },
             },
         },
@@ -128,11 +140,13 @@ def _dispatch_tool(name: str, arguments: str) -> str:
         return aviationstack.search_airports(args.get("query", ""))
     if name == "search_places":
         return google_places.search_places(args.get("text_query", ""))
-    if name == "flight_schedule_lookup":
-        return aviationstack.flight_schedule_lookup(
-            args.get("origin_iata", ""),
-            args.get("dest_iata", ""),
-            args.get("flight_date", ""),
+    if name == "search_flights":
+        return serpapi.search_flights(
+            origin_iata=args.get("origin_iata", ""),
+            dest_iata=args.get("dest_iata", ""),
+            departure_date=args.get("departure_date", ""),
+            airline_code=args.get("airline_code", ""),
+            return_date=args.get("return_date", ""),
         )
     return json.dumps({"error": f"unknown tool {name}"})
 

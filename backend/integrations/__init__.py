@@ -1,1 +1,1 @@
-"""External API integrations (AviationStack, Google Places)."""
+"""External API integrations (AviationStack, Google Places, SerpApi)."""
