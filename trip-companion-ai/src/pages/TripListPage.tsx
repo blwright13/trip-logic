@@ -115,7 +115,13 @@ const TripListPage = () => {
               {trips.map((trip) => (
                 <div
                   key={trip.id}
-                  onClick={() => navigate(`/planner/${trip.id}`)}
+                  onClick={() =>
+                    navigate(
+                      trip.planning_phase === "gathering" || trip.planning_phase === "confirming"
+                        ? `/planning/${trip.id}`
+                        : `/planner/${trip.id}`
+                    )
+                  }
                   className="group relative flex flex-col items-start gap-2 p-4 rounded-2xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all text-left cursor-pointer"
                 >
                   <button

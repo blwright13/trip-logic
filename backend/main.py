@@ -7,26 +7,35 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 from database import get_db, create_tables
+from llm import complete_text, llm_configured
 from models import (
-    Trip, Activity, ChatMessage, CategoryEnum,
+    Trip, Activity, ChatMessage, CategoryEnum, PlanningPhase,
     TripCreate, TripUpdate, TripResponse, ActivityResponse,
-    ChatRequest, ChatResponse, ChatMessageResponse,
+    ChatRequest, ChatResponse, ChatMessageResponse, PlanningChatResponse,
     DayItinerary, DayActivity,
-    ActivityUpdate, ActivityCreate, ReorderRequest, AlternativeActivity, AlternativesResponse
+    ActivityUpdate, ActivityCreate, ReorderRequest, AlternativeActivity, AlternativesResponse,
+    PlanningContextPatch, TasteSignalsBody,
+)
+from integrations.google_places import (
+    configured as places_configured,
+    synthetic_taste_cards,
+    taste_suggestions_for_destinations,
+)
+from planning_graph import (
+    apply_planning_context_to_trip,
+    build_welcome_message,
+    compute_missing_slots,
+    CONFIRM_CHIPS,
+    finalize_confirm_summary,
+    merge_planning_context_patch,
+    run_itinerary_generation,
+    run_planning_turn,
+    seed_planning_context_from_initial_request,
 )
 
 load_dotenv()
-
-# Configure Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
-else:
-    model = None
 
 
 @asynccontextmanager
@@ -48,71 +57,11 @@ app.add_middleware(
 )
 
 
-def parse_trip_with_gemini(request: str) -> dict:
-    """Use Gemini to parse natural language trip request into structured data."""
-    if not model:
-        # Fallback if no Gemini API key
-        return {
-            "title": request,
-            "start": datetime.now().strftime("%Y-%m-%d"),
-            "end": (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d"),
-            "num_people": 2,
-            "budget": 2000,
-            "activities": []
-        }
-
-    prompt = f"""Parse this trip request and generate a structured travel plan with activities.
-Request: "{request}"
-
-Return a JSON object with this exact structure (no markdown, just valid JSON):
-{{
-    "title": "Destination name (e.g., 'Tokyo, Japan')",
-    "start": "YYYY-MM-DD (start date, use reasonable future date)",
-    "end": "YYYY-MM-DD (end date)",
-    "num_people": number,
-    "budget": number (estimated total budget in USD),
-    "activities": [
-        {{
-            "title": "Activity name",
-            "category": "one of: flight, hotel, food, sightseeing, entertainment, cafe, shopping, transport",
-            "start": "YYYY-MM-DDTHH:MM:SS (datetime for this activity)",
-            "duration": number (minutes),
-            "cost": number (USD),
-            "location": "Location name"
-        }}
-    ]
-}}
-
-Generate a realistic itinerary with 4-6 activities per day. Include flights at start/end, hotel check-ins, meals, and sightseeing activities."""
-
-    try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        # Clean up potential markdown code blocks
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
-        print(text)
-        return json.loads(text)
-    except Exception as e:
-        print(f"Gemini parsing error: {e}")
-        return {
-            "title": request,
-            "start": datetime.now().strftime("%Y-%m-%d"),
-            "end": (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d"),
-            "num_people": 2,
-            "budget": 2000,
-            "activities": []
-        }
-
-
 def generate_chat_response(trip: Trip, messages: list[ChatMessage], user_message: str) -> dict:
     """Generate AI response for chat."""
-    if not model:
+    if not llm_configured():
         return {
-            "content": "I'd be happy to help you plan your trip! Unfortunately, the AI service is not configured. Please set up your GEMINI_API_KEY.",
+            "content": "I'd be happy to help you plan your trip! Unfortunately, the AI service is not configured. Please set OPENAI_API_KEY.",
             "chips": ["Try again later"],
             "trip_updated": False
         }
@@ -149,8 +98,7 @@ Return JSON (no markdown):
 }}"""
 
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        text = complete_text(prompt)
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -175,45 +123,32 @@ Return JSON (no markdown):
 
 @app.post("/api/trips", response_model=TripResponse)
 def create_trip(trip_request: TripCreate, db: Session = Depends(get_db)):
-    """Create a new trip from natural language request."""
-    parsed = parse_trip_with_gemini(trip_request.request)
+    """Create a draft trip and enter conversational planning (no itinerary until context is complete)."""
+    start_default = datetime.now().strftime("%Y-%m-%d")
+    end_default = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    # Create trip
     trip = Trip(
-        title=parsed.get("title", "My Trip"),
-        start=parsed.get("start", datetime.now().strftime("%Y-%m-%d")),
-        end=parsed.get("end", (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")),
-        num_people=parsed.get("num_people", 2),
-        budget=parsed.get("budget", 2000),
+        title="New trip",
+        start=start_default,
+        end=end_default,
+        num_people=1,
+        budget=0,
+        planning_phase=PlanningPhase.gathering.value,
+        planning_context={},
+        initial_request=trip_request.request,
     )
     db.add(trip)
-    db.flush()  # Get trip ID
+    db.flush()
 
-    # Create activities
-    for act_data in parsed.get("activities", []):
-        category_str = act_data.get("category", "sightseeing")
-        try:
-            category = CategoryEnum(category_str)
-        except ValueError:
-            category = CategoryEnum.sightseeing
+    ctx = seed_planning_context_from_initial_request(trip_request.request)
+    apply_planning_context_to_trip(trip, ctx)
 
-        activity = Activity(
-            trip_id=trip.id,
-            title=act_data.get("title", "Activity"),
-            category=category,
-            start=act_data.get("start", trip.start + "T09:00:00"),
-            duration=act_data.get("duration", 60),
-            cost=act_data.get("cost", 0),
-            location=act_data.get("location"),
-        )
-        db.add(activity)
-
-    # Add welcome message
+    welcome_text, welcome_chips = build_welcome_message(trip_request.request, ctx)
     welcome = ChatMessage(
         trip_id=trip.id,
         role="assistant",
-        content=f"Welcome! I've created a trip plan for {trip.title}. Feel free to ask me to adjust anything!",
-        chips=["Add more activities", "Find cheaper options", "Add a day trip"]
+        content=welcome_text,
+        chips=welcome_chips,
     )
     db.add(welcome)
 
@@ -266,12 +201,264 @@ def delete_trip(trip_id: int, db: Session = Depends(get_db)):
     return {"message": "Trip deleted"}
 
 
-@app.post("/api/trips/{trip_id}/chat", response_model=ChatResponse)
-def send_chat_message(trip_id: int, chat_request: ChatRequest, db: Session = Depends(get_db)):
-    """Send a chat message and get AI response."""
+@app.post("/api/trips/{trip_id}/planning/message", response_model=PlanningChatResponse)
+def send_planning_message(trip_id: int, chat_request: ChatRequest, db: Session = Depends(get_db)):
+    """Planning chat (gathering or confirming): merge context, taste/confirm flow, or generate on confirm chip."""
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase not in (PlanningPhase.gathering.value, PlanningPhase.confirming.value):
+        raise HTTPException(
+            status_code=400,
+            detail="Trip is not in planning mode; use /chat when itinerary is complete.",
+        )
+
+    # Explicit confirm while reviewing — run itinerary generation (same as POST .../planning/confirm)
+    if trip.planning_phase == PlanningPhase.confirming.value and chat_request.message.strip() in CONFIRM_CHIPS:
+        db.refresh(trip)
+        missing = compute_missing_slots(trip.planning_context or {})
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot generate yet; missing: {', '.join(missing)}",
+            )
+        user_msg = ChatMessage(
+            trip_id=trip_id,
+            role="user",
+            content=chat_request.message,
+        )
+        db.add(user_msg)
+        db.flush()
+        content, chips, build_meta, _ok = run_itinerary_generation(db, trip_id)
+        db.refresh(trip)
+        ai_msg = ChatMessage(
+            trip_id=trip_id,
+            role="assistant",
+            content=content,
+            chips=chips,
+        )
+        db.add(ai_msg)
+        db.commit()
+        db.refresh(ai_msg)
+        db.refresh(trip)
+        missing_after = compute_missing_slots(trip.planning_context or {})
+        return PlanningChatResponse(
+            message=ChatMessageResponse(
+                id=ai_msg.id,
+                role=ai_msg.role,
+                content=ai_msg.content,
+                chips=ai_msg.chips,
+                created_at=ai_msg.created_at,
+            ),
+            trip_updated=True,
+            planning_phase=trip.planning_phase,
+            planning_context=trip.planning_context or {},
+            missing_slots=missing_after,
+            ready_to_generate=trip.planning_phase == PlanningPhase.complete.value,
+            itinerary_build_meta=build_meta,
+        )
+
+    user_msg = ChatMessage(
+        trip_id=trip_id,
+        role="user",
+        content=chat_request.message,
+    )
+    db.add(user_msg)
+    db.flush()
+
+    result = run_planning_turn(db, trip_id, chat_request.message)
+    db.refresh(trip)
+
+    ai_msg = ChatMessage(
+        trip_id=trip_id,
+        role="assistant",
+        content=result.get("assistant_content", ""),
+        chips=result.get("assistant_chips"),
+    )
+    db.add(ai_msg)
+    db.commit()
+    db.refresh(ai_msg)
+    db.refresh(trip)
+
+    missing = compute_missing_slots(trip.planning_context or {})
+    ready = trip.planning_phase == PlanningPhase.complete.value
+
+    return PlanningChatResponse(
+        message=ChatMessageResponse(
+            id=ai_msg.id,
+            role=ai_msg.role,
+            content=ai_msg.content,
+            chips=ai_msg.chips,
+            created_at=ai_msg.created_at,
+        ),
+        trip_updated=True,
+        planning_phase=trip.planning_phase,
+        planning_context=trip.planning_context or {},
+        missing_slots=missing,
+        ready_to_generate=ready,
+        itinerary_build_meta=result.get("itinerary_build_meta"),
+    )
+
+
+@app.patch("/api/trips/{trip_id}/planning-context", response_model=TripResponse)
+def patch_planning_context(trip_id: int, body: PlanningContextPatch, db: Session = Depends(get_db)):
+    """Merge partial JSON into trip.planning_context while gathering or confirming."""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase not in (PlanningPhase.gathering.value, PlanningPhase.confirming.value):
+        raise HTTPException(status_code=400, detail="Trip is not in a planning phase that allows edits.")
+
+    prior = dict(trip.planning_context or {})
+    merged = merge_planning_context_patch(prior, body.planning_context)
+    apply_planning_context_to_trip(trip, merged)
+    db.commit()
+    db.refresh(trip)
+    return trip
+
+
+@app.get("/api/trips/{trip_id}/planning/taste-suggestions")
+def get_planning_taste_suggestions(trip_id: int, db: Session = Depends(get_db)):
+    """Return mixed Google Places suggestions for taste calibration (requires API key)."""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase not in (PlanningPhase.gathering.value, PlanningPhase.confirming.value):
+        raise HTTPException(status_code=400, detail="Trip is not in planning mode.")
+    ctx = trip.planning_context or {}
+    if ctx.get("taste_calibration_status") != "pending":
+        return {"suggestions": [], "configured": True, "reason": "not_in_taste_step"}
+    dests = ctx.get("destinations") or []
+    if not dests:
+        return {"suggestions": [], "configured": True, "reason": "no_destinations"}
+    interests = ctx.get("interests") if isinstance(ctx.get("interests"), list) else []
+    if not places_configured():
+        primary = (dests[0] or "").strip() or "your destination"
+        return {"suggestions": synthetic_taste_cards(primary), "configured": False}
+    suggestions = taste_suggestions_for_destinations(dests, interests)
+    return {"suggestions": suggestions, "configured": True}
+
+
+@app.post("/api/trips/{trip_id}/planning/taste-signals", response_model=PlanningChatResponse)
+def post_planning_taste_signals(trip_id: int, body: TasteSignalsBody, db: Session = Depends(get_db)):
+    """Save like/dislike signals (or skip), then emit confirmation summary and move to confirming phase."""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase != PlanningPhase.gathering.value:
+        raise HTTPException(status_code=400, detail="Taste step is only available during gathering.")
+    ctx = dict(trip.planning_context or {})
+    if ctx.get("taste_calibration_status") != "pending":
+        raise HTTPException(status_code=400, detail="Taste calibration is not pending for this trip.")
+
+    if body.skip:
+        ctx["taste_calibration_status"] = "skipped"
+        ctx["taste_signals"] = {"liked": [], "disliked": []}
+    else:
+        ctx["taste_signals"] = {"liked": body.liked, "disliked": body.disliked}
+        ctx["taste_calibration_status"] = "complete"
+
+    trip.planning_context = ctx
+    apply_planning_context_to_trip(trip, ctx)
+    db.commit()
+    db.refresh(trip)
+
+    content, chips = finalize_confirm_summary(db, trip_id)
+    db.refresh(trip)
+
+    ai_msg = ChatMessage(
+        trip_id=trip_id,
+        role="assistant",
+        content=content,
+        chips=chips,
+    )
+    db.add(ai_msg)
+    db.commit()
+    db.refresh(ai_msg)
+    db.refresh(trip)
+
+    missing = compute_missing_slots(trip.planning_context or {})
+    return PlanningChatResponse(
+        message=ChatMessageResponse(
+            id=ai_msg.id,
+            role=ai_msg.role,
+            content=ai_msg.content,
+            chips=ai_msg.chips,
+            created_at=ai_msg.created_at,
+        ),
+        trip_updated=True,
+        planning_phase=trip.planning_phase,
+        planning_context=trip.planning_context or {},
+        missing_slots=missing,
+        ready_to_generate=False,
+        itinerary_build_meta=None,
+    )
+
+
+@app.post("/api/trips/{trip_id}/planning/confirm", response_model=PlanningChatResponse)
+def post_planning_confirm(trip_id: int, db: Session = Depends(get_db)):
+    """Build the full itinerary after the user has confirmed the planning summary."""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase != PlanningPhase.confirming.value:
+        raise HTTPException(status_code=400, detail="Trip is not awaiting confirmation.")
+
+    missing = compute_missing_slots(trip.planning_context or {})
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
+
+    confirm_user = ChatMessage(
+        trip_id=trip_id,
+        role="user",
+        content="Confirm and build itinerary",
+    )
+    db.add(confirm_user)
+    db.flush()
+
+    content, chips, build_meta, _ok = run_itinerary_generation(db, trip_id)
+    db.refresh(trip)
+
+    ai_msg = ChatMessage(
+        trip_id=trip_id,
+        role="assistant",
+        content=content,
+        chips=chips,
+    )
+    db.add(ai_msg)
+    db.commit()
+    db.refresh(ai_msg)
+    db.refresh(trip)
+
+    missing_after = compute_missing_slots(trip.planning_context or {})
+    return PlanningChatResponse(
+        message=ChatMessageResponse(
+            id=ai_msg.id,
+            role=ai_msg.role,
+            content=ai_msg.content,
+            chips=ai_msg.chips,
+            created_at=ai_msg.created_at,
+        ),
+        trip_updated=True,
+        planning_phase=trip.planning_phase,
+        planning_context=trip.planning_context or {},
+        missing_slots=missing_after,
+        ready_to_generate=trip.planning_phase == PlanningPhase.complete.value,
+        itinerary_build_meta=build_meta,
+    )
+
+
+@app.post("/api/trips/{trip_id}/chat", response_model=ChatResponse)
+def send_chat_message(trip_id: int, chat_request: ChatRequest, db: Session = Depends(get_db)):
+    """Send a chat message after the full itinerary exists (planner refinement)."""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if trip.planning_phase != PlanningPhase.complete.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Trip is still in planning or confirmation mode. Use POST /api/trips/{id}/planning/message instead.",
+        )
 
     # Save user message
     user_msg = ChatMessage(
@@ -359,7 +546,8 @@ def get_itinerary(trip_id: int, db: Session = Depends(get_db)):
             time=time_str,
             cost=activity.cost,
             location=activity.location,
-            category=activity.category
+            category=activity.category,
+            info_url=activity.info_url,
         ))
 
     # Sort days and return
@@ -411,6 +599,7 @@ def create_activity(trip_id: int, activity_data: ActivityCreate, db: Session = D
         duration=activity_data.duration,
         cost=activity_data.cost,
         location=activity_data.location,
+        info_url=activity_data.info_url,
     )
     db.add(activity)
     db.commit()
@@ -455,7 +644,7 @@ def get_alternatives(trip_id: int, activity_id: int, db: Session = Depends(get_d
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
 
-    if not model:
+    if not llm_configured():
         # Fallback alternatives
         return AlternativesResponse(alternatives=[
             AlternativeActivity(
@@ -491,8 +680,7 @@ Return JSON (no markdown):
 Provide diverse options: one similar, one cheaper, one more unique/interesting."""
 
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        text = complete_text(prompt)
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):

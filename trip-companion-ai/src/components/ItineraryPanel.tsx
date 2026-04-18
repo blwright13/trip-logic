@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, ArrowRightLeft, Trash2, Lightbulb, Loader2 } from "lucide-react";
+import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, ArrowRightLeft, Trash2, Lightbulb, Loader2, ExternalLink } from "lucide-react";
 
 export interface Activity {
   id: string;
@@ -8,6 +8,8 @@ export interface Activity {
   cost: number;
   location: string;
   category: "food" | "sightseeing" | "transport" | "hotel" | "shopping" | "entertainment" | "flight" | "cafe";
+  /** Google Maps / website, or Google Flights search for flights */
+  info_url?: string | null;
 }
 
 export interface DayPlan {
@@ -153,7 +155,22 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h3 className="font-semibold text-sm text-foreground truncate">{activity.name}</h3>
+                        <h3 className="font-semibold text-sm text-foreground truncate">
+                          {activity.info_url ? (
+                            <a
+                              href={activity.info_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-foreground hover:text-primary hover:underline inline-flex items-center gap-1 max-w-full"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span className="truncate">{activity.name}</span>
+                              <ExternalLink className="size-3.5 shrink-0 text-primary opacity-80" aria-hidden />
+                            </a>
+                          ) : (
+                            activity.name
+                          )}
+                        </h3>
                         <p className="text-xs text-muted-foreground mt-0.5">{activity.location}</p>
                       </div>
                       <div className="text-right shrink-0">

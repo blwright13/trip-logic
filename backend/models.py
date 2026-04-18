@@ -1,9 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, Enum as SQLEnum
+from typing import Any, Optional
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, Enum as SQLEnum, Text
 from sqlalchemy.orm import relationship
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import Base
 
@@ -21,6 +21,13 @@ class CategoryEnum(str, Enum):
 
 # SQLAlchemy Models
 
+class PlanningPhase(str, Enum):
+    gathering = "gathering"
+    confirming = "confirming"
+    generating = "generating"
+    complete = "complete"
+
+
 class Trip(Base):
     __tablename__ = "trips"
 
@@ -31,6 +38,9 @@ class Trip(Base):
     num_people = Column(Integer, default=1)
     budget = Column(Float, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    planning_phase = Column(String, nullable=False, default=PlanningPhase.gathering.value)
+    planning_context = Column(JSON, nullable=False, default=lambda: {})
+    initial_request = Column(Text, nullable=True)
 
     activities = relationship("Activity", back_populates="trip", cascade="all, delete-orphan")
     messages = relationship("ChatMessage", back_populates="trip", cascade="all, delete-orphan")
@@ -47,6 +57,7 @@ class Activity(Base):
     duration = Column(Integer, default=60)  # Duration in minutes
     cost = Column(Float, default=0)
     location = Column(String, nullable=True)
+    info_url = Column(String, nullable=True)  # Google Maps / website or flight search link
 
     trip = relationship("Trip", back_populates="activities")
 
@@ -86,6 +97,7 @@ class ActivityResponse(BaseModel):
     duration: int
     cost: float
     location: Optional[str]
+    info_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -100,6 +112,9 @@ class TripResponse(BaseModel):
     budget: float
     created_at: datetime
     activities: list[ActivityResponse] = []
+    planning_phase: str = PlanningPhase.gathering.value
+    planning_context: dict[str, Any] = Field(default_factory=dict)
+    initial_request: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -125,6 +140,31 @@ class ChatResponse(BaseModel):
     trip_updated: bool = False
 
 
+class PlanningChatResponse(BaseModel):
+    message: ChatMessageResponse
+    trip_updated: bool = True
+    planning_phase: str
+    planning_context: dict[str, Any]
+    missing_slots: list[str] = []
+    ready_to_generate: bool = False
+    itinerary_build_meta: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Populated when this request ran full itinerary generation (tool loop + parse).",
+    )
+
+
+class PlanningContextPatch(BaseModel):
+    """Partial merge into trip.planning_context (gathering or confirming phase)."""
+
+    planning_context: dict[str, Any]
+
+
+class TasteSignalsBody(BaseModel):
+    liked: list[dict[str, Any]] = Field(default_factory=list)
+    disliked: list[dict[str, Any]] = Field(default_factory=list)
+    skip: bool = False
+
+
 class DayActivity(BaseModel):
     id: int
     name: str
@@ -132,6 +172,7 @@ class DayActivity(BaseModel):
     cost: float
     location: Optional[str]
     category: CategoryEnum
+    info_url: Optional[str] = None
 
 
 class DayItinerary(BaseModel):
@@ -149,6 +190,7 @@ class ActivityUpdate(BaseModel):
     duration: Optional[int] = None
     cost: Optional[float] = None
     location: Optional[str] = None
+    info_url: Optional[str] = None
 
 
 class ActivityCreate(BaseModel):
@@ -158,6 +200,7 @@ class ActivityCreate(BaseModel):
     duration: int = 60
     cost: float = 0
     location: Optional[str] = None
+    info_url: Optional[str] = None
 
 
 class ReorderRequest(BaseModel):

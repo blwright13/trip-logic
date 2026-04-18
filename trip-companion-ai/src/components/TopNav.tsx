@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 const TopNav = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const isPlanner = location.pathname === "/planner";
+  const isPlannerRoute =
+    location.pathname.startsWith("/planner/") || location.pathname.startsWith("/planning/");
 
   return (
     <header className="h-14 shrink-0 border-b border-border bg-card flex items-center justify-between px-4">
@@ -23,10 +24,12 @@ const TopNav = () => {
       </button>
 
       <div className="flex items-center gap-3">
-        {!isPlanner && <Button size="sm" onClick={() => navigate("/planner")} className="gap-1.5">
+        {!isPlannerRoute && (
+          <Button size="sm" onClick={() => navigate("/")} className="gap-1.5">
             <Plus size={14} />
             New Trip
-          </Button>}
+          </Button>
+        )}
         <Avatar className="h-8 w-8 cursor-pointer">
           <AvatarFallback className="bg-secondary text-muted-foreground text-xs font-semibold">
             JD

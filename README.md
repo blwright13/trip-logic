@@ -7,7 +7,7 @@ AI-powered trip planning application with FastAPI backend and React frontend.
 - Python 3.10+
 - Node.js 18+
 - PostgreSQL (or Supabase)
-- Gemini API key
+- OpenAI API key (GPT-4o by default)
 
 ## Backend Setup
 
@@ -60,6 +60,7 @@ The frontend will be available at http://localhost:8080
 
 ## Environment Variables
 
-- `GEMINI_API_KEY`: Google Gemini API key for AI features
+- `OPENAI_API_KEY`: OpenAI API key for AI features
+- `OPENAI_MODEL`: Chat model id (optional; default `gpt-4o`)
 - `DATABASE_URL`: PostgreSQL connection string
 - `FRONTEND_URL`: Frontend URL for CORS (default: http://localhost:8080)

@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2 } from "lucide-react";
+import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2, ExternalLink } from "lucide-react";
 import TopNav from "@/components/TopNav";
 import { Button } from "@/components/ui/button";
 import { useTrip, useItinerary } from "@/hooks/useTrip";
@@ -37,6 +37,7 @@ const TripSummaryPage = () => {
         cost: a.cost,
         location: a.location || "",
         category: a.category,
+        info_url: a.info_url ?? undefined,
       })),
     }));
   }, [itineraryData]);
@@ -68,6 +69,12 @@ const TripSummaryPage = () => {
     const locs = [...new Set(allActivities.map((a) => a.location).filter(Boolean))];
     return locs;
   }, [allActivities]);
+
+  useEffect(() => {
+    if (tripData?.planning_phase === "gathering" || tripData?.planning_phase === "confirming") {
+      navigate(`/planning/${tripId}`, { replace: true });
+    }
+  }, [tripData, tripId, navigate]);
 
   const handleExport = () => {
     const lines = [`Trip to ${trip.destination}`, `${trip.startDate} — ${trip.endDate}`, `Budget: $${trip.budget}`, `Travelers: ${trip.travelers}`, ""];
@@ -165,7 +172,21 @@ const TripSummaryPage = () => {
                           <div key={a.id} className="flex items-center gap-3 text-sm">
                             <span className="text-xs text-muted-foreground w-16 shrink-0">{a.time}</span>
                             <Icon size={14} className="text-primary shrink-0" />
-                            <span className="text-foreground font-medium flex-1 truncate">{a.name}</span>
+                            <span className="text-foreground font-medium flex-1 truncate min-w-0">
+                              {a.info_url ? (
+                                <a
+                                  href={a.info_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 hover:text-primary hover:underline"
+                                >
+                                  <span className="truncate">{a.name}</span>
+                                  <ExternalLink className="size-3.5 shrink-0 text-primary opacity-80" />
+                                </a>
+                              ) : (
+                                a.name
+                              )}
+                            </span>
                             <span className="text-primary font-semibold">${a.cost}</span>
                           </div>
                         );

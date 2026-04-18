@@ -67,6 +67,7 @@ const Planner = () => {
         cost: a.cost,
         location: a.location || "",
         category: a.category,
+        info_url: a.info_url ?? undefined,
       })),
     }));
   }, [itineraryData]);
@@ -103,6 +104,12 @@ const Planner = () => {
       setSelectedDay(days[0]?.day || 1);
     }
   }, [days, selectedDay]);
+
+  useEffect(() => {
+    if (tripData?.planning_phase === "gathering" || tripData?.planning_phase === "confirming") {
+      navigate(`/planning/${tripId}`, { replace: true });
+    }
+  }, [tripData, tripId, navigate]);
 
   const handleSend = async (text: string) => {
     // Optimistically add user message
@@ -212,13 +219,15 @@ const Planner = () => {
       <TopNav />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Chat Panel */}
-        <div className="w-full md:w-[420px] lg:w-[460px] shrink-0 border-r border-border flex flex-col">
+        <div className="w-full md:w-[420px] lg:w-[460px] shrink-0 border-r border-border flex min-h-0 flex-col">
           <ChatPanel
             messages={messages}
             trip={trip}
             onSend={handleSend}
             onTripUpdate={setTrip}
             onChipClick={handleChipClick}
+            sendDisabled={sendMessageMutation.isPending}
+            isAwaitingResponse={sendMessageMutation.isPending}
           />
         </div>
 

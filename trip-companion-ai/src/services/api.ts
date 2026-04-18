@@ -8,7 +8,10 @@ export interface Activity {
   duration: number;
   cost: number;
   location: string | null;
+  info_url?: string | null;
 }
+
+export type PlanningPhase = "gathering" | "confirming" | "generating" | "complete";
 
 export interface Trip {
   id: number;
@@ -19,6 +22,9 @@ export interface Trip {
   budget: number;
   created_at: string;
   activities: Activity[];
+  planning_phase?: PlanningPhase;
+  planning_context?: Record<string, unknown>;
+  initial_request?: string | null;
 }
 
 export interface ChatMessage {
@@ -36,6 +42,7 @@ export interface DayActivity {
   cost: number;
   location: string | null;
   category: Activity["category"];
+  info_url?: string | null;
 }
 
 export interface DayItinerary {
@@ -104,6 +111,81 @@ export async function sendMessage(tripId: number, message: string): Promise<{ me
   return fetchApi(`/trips/${tripId}/chat`, {
     method: "POST",
     body: JSON.stringify({ message }),
+  });
+}
+
+/** Present when the backend ran full itinerary generation on this turn (see server logs for details). */
+export interface ItineraryBuildMeta {
+  agent: string;
+  openai_model: string;
+  used_tools: boolean;
+  llm_completion_rounds: number;
+  tool_calls_total: number;
+  tools_by_name: Record<string, number>;
+  finish: string;
+  fallback_reason: string | null;
+  parsed_activity_count: number;
+}
+
+export interface PlanningChatResult {
+  message: ChatMessage;
+  trip_updated: boolean;
+  planning_phase: PlanningPhase;
+  planning_context: Record<string, unknown>;
+  missing_slots: string[];
+  ready_to_generate: boolean;
+  itinerary_build_meta?: ItineraryBuildMeta | null;
+}
+
+export async function sendPlanningMessage(tripId: number, message: string): Promise<PlanningChatResult> {
+  return fetchApi<PlanningChatResult>(`/trips/${tripId}/planning/message`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
+export interface TastePlaceSuggestion {
+  id: string;
+  name: string | null;
+  address: string | null;
+  rating: number | null;
+  types: string[];
+  query: string;
+}
+
+export interface TasteSuggestionsResult {
+  suggestions: TastePlaceSuggestion[];
+  configured: boolean;
+  reason?: string;
+}
+
+export async function getPlanningTasteSuggestions(tripId: number): Promise<TasteSuggestionsResult> {
+  return fetchApi<TasteSuggestionsResult>(`/trips/${tripId}/planning/taste-suggestions`);
+}
+
+export async function postPlanningTasteSignals(
+  tripId: number,
+  body: { liked: TastePlaceSuggestion[]; disliked: TastePlaceSuggestion[]; skip?: boolean }
+): Promise<PlanningChatResult> {
+  return fetchApi<PlanningChatResult>(`/trips/${tripId}/planning/taste-signals`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function postPlanningConfirm(tripId: number): Promise<PlanningChatResult> {
+  return fetchApi<PlanningChatResult>(`/trips/${tripId}/planning/confirm`, {
+    method: "POST",
+  });
+}
+
+export async function patchPlanningContext(
+  tripId: number,
+  planningContext: Record<string, unknown>
+): Promise<Trip> {
+  return fetchApi<Trip>(`/trips/${tripId}/planning-context`, {
+    method: "PATCH",
+    body: JSON.stringify({ planning_context: planningContext }),
   });
 }
 

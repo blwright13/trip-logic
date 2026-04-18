@@ -6,6 +6,10 @@ venv/
 env/
 .env
 
+# Local SQLite (dev default in backend/database.py)
+backend/triplogic.db
+*.db
+
 # Node
 node_modules/
 dist/
@@ -18,3 +22,6 @@ dist/
 # Build artifacts
 *.session
 *.session.*
+
+
+.superpowers/

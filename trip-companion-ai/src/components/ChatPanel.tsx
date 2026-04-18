@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import TripSummary from "./TripSummary";
 
 export interface ChatMessage {
@@ -23,15 +23,34 @@ interface ChatPanelProps {
   onSend: (text: string) => void;
   onTripUpdate: (trip: TripInfo) => void;
   onChipClick: (chip: string) => void;
+  /** When false, show a read-only trip strip (e.g. conversational planning). Default true. */
+  showTripSummaryEditor?: boolean;
+  sendDisabled?: boolean;
+  /** Show a transient assistant row while the server is responding. */
+  isAwaitingResponse?: boolean;
+  awaitingLabel?: string;
+  /** Extra classes for the root (e.g. flex-1 min-h-0 inside a fixed-height layout). */
+  className?: string;
 }
 
-const ChatPanel = ({ messages, trip, onSend, onTripUpdate, onChipClick }: ChatPanelProps) => {
+const ChatPanel = ({
+  messages,
+  trip,
+  onSend,
+  onTripUpdate,
+  onChipClick,
+  showTripSummaryEditor = true,
+  sendDisabled = false,
+  isAwaitingResponse = false,
+  awaitingLabel = "Thinking…",
+  className = "",
+}: ChatPanelProps) => {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isAwaitingResponse]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,8 +60,20 @@ const ChatPanel = ({ messages, trip, onSend, onTripUpdate, onChipClick }: ChatPa
   };
 
   return (
-    <div className="flex flex-col h-full bg-chat">
-      <TripSummary trip={trip} onUpdate={onTripUpdate} />
+    <div className={`flex flex-col flex-1 min-h-0 bg-chat ${className}`.trim()}>
+      {showTripSummaryEditor ? (
+        <TripSummary trip={trip} onUpdate={onTripUpdate} />
+      ) : (
+        <div className="p-4 border-b border-border bg-card shrink-0">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Trip details</p>
+          <p className="font-semibold text-foreground truncate">{trip.destination}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {trip.startDate && trip.endDate ? `${trip.startDate} — ${trip.endDate}` : "Dates TBD"}
+            {trip.travelers ? ` · ${trip.travelers} travelers` : ""}
+            {trip.budget ? ` · $${trip.budget.toLocaleString()}` : ""}
+          </p>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.map((msg) => (
@@ -73,6 +104,14 @@ const ChatPanel = ({ messages, trip, onSend, onTripUpdate, onChipClick }: ChatPa
             </div>
           </div>
         ))}
+        {isAwaitingResponse && (
+          <div className="flex justify-start">
+            <div className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-bl-md bg-chat-ai text-chat-ai-foreground text-sm flex items-center gap-2">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" aria-hidden />
+              <span className="text-muted-foreground">{awaitingLabel}</span>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -86,7 +125,7 @@ const ChatPanel = ({ messages, trip, onSend, onTripUpdate, onChipClick }: ChatPa
           />
           <button
             type="submit"
-            disabled={!input.trim()}
+            disabled={!input.trim() || sendDisabled || isAwaitingResponse}
             className="p-1.5 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 hover:bg-primary/90 transition-colors"
           >
             <Send size={16} />

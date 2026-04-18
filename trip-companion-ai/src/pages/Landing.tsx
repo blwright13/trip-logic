@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, ArrowRight, MapPin, Loader2 } from "lucide-react";
+import { Search, ArrowRight, MapPin, Loader2, Trash2 } from "lucide-react";
 import TopNav from "@/components/TopNav";
 import { Button } from "@/components/ui/button";
-import { useCreateTrip, useTrips } from "@/hooks/useTrip";
+import { useCreateTrip, useDeleteTrip, useTrips } from "@/hooks/useTrip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const formatDateRange = (start: string, end: string) => {
   const startDate = new Date(start);
@@ -21,10 +31,24 @@ const getDuration = (start: string, end: string) => {
 
 const Landing = () => {
   const [query, setQuery] = useState("");
+  const [tripToDelete, setTripToDelete] = useState<number | null>(null);
   const navigate = useNavigate();
   const createTrip = useCreateTrip();
+  const deleteTripMutation = useDeleteTrip();
   const { data: trips = [], isLoading: tripsLoading } = useTrips();
   const recentTrips = trips.slice(0, 4);
+
+  const handleDelete = (e: React.MouseEvent, tripId: number) => {
+    e.stopPropagation();
+    setTripToDelete(tripId);
+  };
+
+  const confirmDelete = () => {
+    if (tripToDelete !== null) {
+      deleteTripMutation.mutate(tripToDelete);
+      setTripToDelete(null);
+    }
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,16 +141,30 @@ const Landing = () => {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {recentTrips.map((trip) => (
-                <button
+                <div
                   key={trip.id}
-                  onClick={() => navigate(`/planner/${trip.id}`)}
-                  className="group flex flex-col items-start gap-2 p-4 rounded-2xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all text-left"
+                  onClick={() =>
+                    navigate(
+                      trip.planning_phase === "gathering" || trip.planning_phase === "confirming"
+                        ? `/planning/${trip.id}`
+                        : `/planner/${trip.id}`
+                    )
+                  }
+                  className="group relative flex flex-col items-start gap-2 p-4 rounded-2xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all text-left cursor-pointer"
                 >
+                  <button
+                    type="button"
+                    onClick={(e) => handleDelete(e, trip.id)}
+                    className="absolute top-3 right-3 p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+                    title="Delete trip"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-primary/10 text-primary">
                     <MapPin size={18} />
                   </div>
                   <div className="w-full">
-                    <p className="font-semibold text-sm text-foreground truncate">{trip.title}</p>
+                    <p className="font-semibold text-sm text-foreground truncate pr-6">{trip.title}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {formatDateRange(trip.start, trip.end)} · {getDuration(trip.start, trip.end)}
                     </p>
@@ -134,13 +172,33 @@ const Landing = () => {
                       {trip.activities.length} activities · ${trip.budget.toLocaleString()}
                     </p>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </section>
         )}
 
       </main>
+
+      <AlertDialog open={tripToDelete !== null} onOpenChange={() => setTripToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Trip</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this trip? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
