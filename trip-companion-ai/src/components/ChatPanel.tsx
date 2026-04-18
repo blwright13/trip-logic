@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { Loader2, Send } from "lucide-react";
 import TripSummary from "./TripSummary";
 
@@ -31,7 +31,33 @@ interface ChatPanelProps {
   awaitingLabel?: string;
   /** Extra classes for the root (e.g. flex-1 min-h-0 inside a fixed-height layout). */
   className?: string;
+  /** Toggle assistant suggestion chips visibility. Default true. */
+  showChips?: boolean;
+  /** Inline content rendered directly beneath the latest assistant message. */
+  afterLastAssistantMessage?: ReactNode;
 }
+
+const renderInlineMarkdown = (text: string) => {
+  const boldPattern = /\*\*(.+?)\*\*/g;
+  const parts: Array<string | JSX.Element> = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = boldPattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index));
+    }
+    parts.push(<strong key={`bold-${key++}`}>{match[1]}</strong>);
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+
+  return parts.length > 0 ? parts : [text];
+};
 
 const ChatPanel = ({
   messages,
@@ -44,6 +70,8 @@ const ChatPanel = ({
   isAwaitingResponse = false,
   awaitingLabel = "Thinking…",
   className = "",
+  showChips = true,
+  afterLastAssistantMessage,
 }: ChatPanelProps) => {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -76,34 +104,38 @@ const ChatPanel = ({
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] space-y-2`}>
-              <div
-                className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-chat-user text-chat-user-foreground rounded-br-md"
-                    : "bg-chat-ai text-chat-ai-foreground rounded-bl-md"
-                }`}
-              >
-                {msg.text}
-              </div>
-              {msg.chips && msg.chips.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {msg.chips.map((chip) => (
-                    <button
-                      key={chip}
-                      onClick={() => onChipClick(chip)}
-                      className="px-3 py-1 text-xs font-medium rounded-full bg-chip text-chip-foreground hover:bg-chip-hover transition-colors"
-                    >
-                      {chip}
-                    </button>
-                  ))}
+        {(() => {
+          const lastAiIdx = messages.map((m) => m.role).lastIndexOf("ai");
+          return messages.map((msg, idx) => (
+            <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[80%] space-y-2`}>
+                <div
+                  className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                    msg.role === "user"
+                      ? "bg-chat-user text-chat-user-foreground rounded-br-md"
+                      : "bg-chat-ai text-chat-ai-foreground rounded-bl-md"
+                  }`}
+                >
+                  {renderInlineMarkdown(msg.text)}
                 </div>
-              )}
+                {idx === lastAiIdx && afterLastAssistantMessage}
+                {showChips && idx === lastAiIdx && msg.chips && msg.chips.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {msg.chips.map((chip) => (
+                      <button
+                        key={chip}
+                        onClick={() => onChipClick(chip)}
+                        className="px-3 py-1 text-xs font-medium rounded-full bg-chip text-chip-foreground hover:bg-chip-hover transition-colors"
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          ));
+        })()}
         {isAwaitingResponse && (
           <div className="flex justify-start">
             <div className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-bl-md bg-chat-ai text-chat-ai-foreground text-sm flex items-center gap-2">

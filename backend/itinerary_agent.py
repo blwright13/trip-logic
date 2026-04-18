@@ -102,6 +102,27 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "search_hotels",
+                "description": (
+                    "Search real available hotels and nightly rates for a destination using Google Hotels. "
+                    "Returns hotel name, star rating, amenities, and actual price per night in USD. "
+                    "Use this to ground hotel costs instead of estimating."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "destination": {"type": "string", "description": "City or area, e.g. 'Paris' or 'Midtown Manhattan'"},
+                        "check_in_date": {"type": "string", "description": "Check-in date YYYY-MM-DD"},
+                        "check_out_date": {"type": "string", "description": "Check-out date YYYY-MM-DD"},
+                        "adults": {"type": "integer", "description": "Number of adult guests"},
+                    },
+                    "required": ["destination", "check_in_date", "check_out_date"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_flights",
                 "description": (
                     "Search real available flights between two airports on a date using Google Flights. "
@@ -140,6 +161,13 @@ def _dispatch_tool(name: str, arguments: str) -> str:
         return aviationstack.search_airports(args.get("query", ""))
     if name == "search_places":
         return google_places.search_places(args.get("text_query", ""))
+    if name == "search_hotels":
+        return serpapi.search_hotels(
+            destination=args.get("destination", ""),
+            check_in_date=args.get("check_in_date", ""),
+            check_out_date=args.get("check_out_date", ""),
+            adults=int(args.get("adults", 2)),
+        )
     if name == "search_flights":
         return serpapi.search_flights(
             origin_iata=args.get("origin_iata", ""),
@@ -170,10 +198,34 @@ def run_itinerary_agent_with_tools(trip: Trip) -> tuple[dict, dict[str, Any]]:
         meta["parsed_activity_count"] = _activity_count(merged)
         return merged, meta
 
-    system = """You are an expert travel itinerary builder. You may call tools to fetch real airport, flight, or place data.
-When you have enough context, respond with ONLY a single JSON object (no markdown fences) with this exact shape:
+    system = """You are an expert travel itinerary builder. Follow these rules exactly.
+
+DAILY STRUCTURE — every day must include all 5 slots unless it is a travel-only day:
+  Breakfast:          08:00–08:45  (category: food, ~45 min)
+  Morning activity:   09:30–12:00  (category: sightseeing or entertainment, 90–150 min)
+  Lunch:              12:30–13:30  (category: food or cafe, 60 min)
+  Afternoon activity: 14:30–17:00  (category: sightseeing or entertainment, 90–150 min)
+  Dinner:             18:30–20:00  (category: food, 90 min)
+
+MANDATORY TOOL CALLS — complete these before writing the final JSON:
+  1. If the trip has a known origin city or airport, call search_flights for the outbound leg.
+     If round-trip, also call search_flights for the return flight.
+  2. Call search_hotels for each destination to get real nightly rates.
+     Use the trip start date as check_in_date and end date as check_out_date.
+  3. Call search_places at least TWICE per destination:
+     - once for top restaurants/cafés (e.g. "best restaurants in Paris")
+     - once for top sightseeing/attractions (e.g. "top attractions in Paris")
+  4. Use real venue names and price signals from tool results in your activity titles and costs.
+
+COST GROUNDING:
+  - Meals: use Places API price_level as a guide ($ ≈ $15/person, $$ ≈ $30, $$$ ≈ $60, $$$$ ≈ $100+)
+  - Flights: use SerpAPI prices directly; estimate from distance/class if unavailable
+  - Hotels: use the actual rate_per_night_usd from search_hotels results; include 1 hotel activity per night at that price
+  - Total of all activity costs must fall within 85–105% of the stated budget
+
+OUTPUT: Respond with ONLY a single valid JSON object (no markdown fences) matching this schema:
 {
-  "title": "Catchy 2-6 word trip name (NOT a long sentence, NOT the raw prompt)",
+  "title": "Catchy 2-6 word trip name (NOT a full sentence, NOT the raw prompt)",
   "start": "YYYY-MM-DD",
   "end": "YYYY-MM-DD",
   "num_people": <number>,
@@ -189,15 +241,13 @@ When you have enough context, respond with ONLY a single JSON object (no markdow
     }
   ]
 }
-Do not include info_url in activities — the server attaches Maps / Flights links when saving.
-Use tool results to ground real venue names and airports when relevant. Activity start datetimes must fall between start and end dates inclusive.
-If a tool returns an error, continue without failing — use reasonable estimates."""
+Do not include info_url — the server attaches Maps / Flights links when saving.
+Activity start datetimes must fall between start and end dates inclusive.
+If a tool returns an error, continue with reasonable estimates."""
 
     user_content = f"""Build the full itinerary for this trip.
 
-{base_prompt}
-
-Include flights at start/end where appropriate, hotels, meals, and sightseeing. Budget activities to fit the total budget."""
+{base_prompt}"""
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},

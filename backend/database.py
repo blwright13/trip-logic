@@ -53,7 +53,25 @@ def _ensure_activity_info_url_column() -> None:
         pass
 
 
+def _ensure_trip_user_id_column() -> None:
+    """Add user_id to trips if missing (SQLite / simple deploys without Alembic)."""
+    try:
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        if "trips" not in tables:
+            return
+        cols = {c["name"] for c in inspector.get_columns("trips")}
+        if "user_id" in cols:
+            return
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE trips ADD COLUMN user_id VARCHAR"))
+            conn.commit()
+    except Exception:
+        pass
+
+
 def create_tables():
     """Create all tables in the database."""
     Base.metadata.create_all(bind=engine)
     _ensure_activity_info_url_column()
+    _ensure_trip_user_id_column()

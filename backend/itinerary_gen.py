@@ -1,12 +1,15 @@
 """Full itinerary generation from a natural-language prompt (used after planning context is complete)."""
 import json
-from datetime import datetime, timedelta
+import logging
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from llm import complete_text, llm_configured
 from itinerary_enrich import enrich_activity_urls
 from models import Trip, Activity, CategoryEnum
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_json(text: str) -> str:
@@ -101,11 +104,56 @@ Generate a realistic itinerary with 4-6 activities per day. Include flights at s
         }
 
 
+def validate_day_coverage(trip: Trip, activities: list[dict]) -> None:
+    """Log warnings for days with no activities, missing meals, or overlapping time windows."""
+    if not trip.start or not trip.end:
+        return
+    try:
+        start = date.fromisoformat(trip.start)
+        end = date.fromisoformat(trip.end)
+    except ValueError:
+        return
+
+    expected_days = {start + timedelta(days=i) for i in range((end - start).days + 1)}
+    by_day: dict[date, list[dict]] = {d: [] for d in expected_days}
+
+    for act in activities:
+        raw = act.get("start", "")
+        try:
+            act_date = datetime.fromisoformat(raw).date()
+            if act_date in by_day:
+                by_day[act_date].append(act)
+        except (ValueError, TypeError):
+            pass
+
+    for d in sorted(expected_days):
+        day_acts = by_day[d]
+        if not day_acts:
+            logger.warning("itinerary_coverage: no activities on %s", d)
+        elif not any(a.get("category") == "food" for a in day_acts):
+            logger.warning("itinerary_coverage: no meal on %s", d)
+
+        sorted_acts = sorted(day_acts, key=lambda a: a.get("start", ""))
+        for i in range(len(sorted_acts) - 1):
+            try:
+                a_start = datetime.fromisoformat(sorted_acts[i]["start"])
+                a_end = a_start + timedelta(minutes=int(sorted_acts[i].get("duration", 60)))
+                b_start = datetime.fromisoformat(sorted_acts[i + 1]["start"])
+                if a_end > b_start:
+                    logger.warning(
+                        "itinerary_coverage: overlap on %s between '%s' and '%s'",
+                        d, sorted_acts[i].get("title"), sorted_acts[i + 1].get("title"),
+                    )
+            except (ValueError, TypeError, KeyError):
+                pass
+
+
 def replace_trip_activities(db: Session, trip: Trip, parsed: dict) -> None:
     """Replace all activities for a trip from parsed itinerary data."""
     parsed = merge_parsed_with_canonical(trip, parsed)
     activities = parsed.get("activities") or []
     enrich_activity_urls(trip, activities)
+    validate_day_coverage(trip, activities)
     db.query(Activity).filter(Activity.trip_id == trip.id).delete(synchronize_session=False)
     trip.title = parsed.get("title", trip.title)
     trip.start = parsed.get("start", trip.start)

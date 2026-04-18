@@ -1,5 +1,8 @@
 """Shared prompt builders for planning / itinerary generation."""
 
+from datetime import date
+from typing import Optional
+
 from models import Trip
 
 
@@ -8,15 +11,59 @@ def _taste_lines(ctx: dict) -> list[str]:
     liked = ts.get("liked") or []
     disliked = ts.get("disliked") or []
     lines: list[str] = []
+
+    def price_label(raw: object) -> Optional[str]:
+        if raw is None:
+            return None
+        labels = {
+            "0": "free",
+            "1": "$",
+            "2": "$$",
+            "3": "$$$",
+            "4": "$$$$",
+            "PRICE_LEVEL_FREE": "free",
+            "PRICE_LEVEL_INEXPENSIVE": "$",
+            "PRICE_LEVEL_MODERATE": "$$",
+            "PRICE_LEVEL_EXPENSIVE": "$$$",
+            "PRICE_LEVEL_VERY_EXPENSIVE": "$$$$",
+        }
+        return labels.get(str(raw).strip().upper())
+
+    def place_summary(place: dict) -> str:
+        parts = [str(place.get("name") or "?")]
+        types = place.get("types")
+        if isinstance(types, list) and types:
+            parts.append(f"types: {', '.join(str(t).replace('_', ' ') for t in types[:3])}")
+        price = price_label(place.get("price_level"))
+        if price:
+            parts.append(f"price: {price}")
+        description = place.get("description")
+        if isinstance(description, str) and description.strip():
+            parts.append(f"expectation: {description.strip()}")
+        return " (".join([parts[0], "; ".join(parts[1:]) + ")"]) if len(parts) > 1 else parts[0]
+
     if liked:
-        names = [str(p.get("name", "?")) for p in liked if isinstance(p, dict)]
-        if names:
-            lines.append(f"User liked these example places (prefer similar): {', '.join(names[:12])}")
+        summaries = [place_summary(p) for p in liked if isinstance(p, dict)]
+        if summaries:
+            lines.append(
+                "User liked these example places; prefer similar venue styles, cuisines, price levels, and pacing: "
+                + " | ".join(summaries[:8])
+            )
     if disliked:
-        names = [str(p.get("name", "?")) for p in disliked if isinstance(p, dict)]
-        if names:
-            lines.append(f"User disliked these example places (avoid similar): {', '.join(names[:12])}")
+        summaries = [place_summary(p) for p in disliked if isinstance(p, dict)]
+        if summaries:
+            lines.append(
+                "User disliked these example places; avoid similar venue styles, cuisines, price levels, and pacing: "
+                + " | ".join(summaries[:8])
+            )
     return lines
+
+
+_PACE_DENSITY = {
+    "relaxed": "4–5 activities per day (3 meals + 1–2 experiences)",
+    "moderate": "5–6 activities per day (3 meals + 2–3 experiences)",
+    "packed": "6–8 activities per day (3 meals + 3–5 experiences)",
+}
 
 
 def context_to_generation_prompt(trip: Trip) -> str:
@@ -51,4 +98,21 @@ def context_to_generation_prompt(trip: Trip) -> str:
     if ctx.get("extra_context"):
         parts.append(f"Additional preferences from traveler: {ctx['extra_context']}")
     parts.extend(_taste_lines(ctx))
-    return "Create a complete detailed itinerary for this trip. " + "\n".join(parts)
+
+    # Computed scheduling context
+    try:
+        start = date.fromisoformat(ctx["start"])
+        end = date.fromisoformat(ctx["end"])
+        num_days = (end - start).days + 1
+        parts.append(f"Total days: {num_days}. You MUST generate activities covering ALL {num_days} days.")
+        budget = ctx.get("budget")
+        if budget is not None and num_days > 0:
+            parts.append(f"Approximate budget per day: ${float(budget) / num_days:.0f} USD")
+    except (KeyError, ValueError, TypeError):
+        pass
+
+    pace = ctx.get("pace", "").lower()
+    density = _PACE_DENSITY.get(pace, "5–6 activities per day (3 meals + 2–3 experiences)")
+    parts.append(f"Target activity density: {density}")
+
+    return "\n".join(parts)

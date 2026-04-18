@@ -2,15 +2,53 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import quote
 
 from integrations.google_places import configured as places_configured, search_places
 from models import Trip
 
+_IATA_RE = re.compile(r"\b([A-Z]{3})\b")
 
-def google_flights_search_url(query: str) -> str:
-    """Consumer-friendly flight search (AviationStack has no public booking/detail URLs)."""
-    q = (query or "").strip() or "flights"
+
+def _extract_iata_pair(text: str) -> tuple[str, str] | None:
+    """Return (origin_iata, dest_iata) if two distinct 3-letter codes are found in text."""
+    codes = _IATA_RE.findall(text or "")
+    seen: list[str] = []
+    for c in codes:
+        if c not in seen:
+            seen.append(c)
+        if len(seen) == 2:
+            return seen[0], seen[1]
+    return None
+
+
+def google_flights_search_url(
+    origin: str = "",
+    destination: str = "",
+    date: str = "",
+    title: str = "",
+) -> str:
+    """
+    Build a Google Flights search URL pre-populated with origin, destination, and date.
+
+    Tries to extract IATA codes from `title` first (e.g. "Delta DL101 DTW→CDG").
+    Falls back to raw origin/destination city names.
+    """
+    pair = _extract_iata_pair(title)
+    if pair:
+        origin_q, dest_q = pair
+    else:
+        origin_q = (origin or "").strip()
+        dest_q = (destination or "").strip()
+
+    if origin_q and dest_q and date:
+        q = f"flights from {origin_q} to {dest_q} on {date}"
+    elif origin_q and dest_q:
+        q = f"flights from {origin_q} to {dest_q}"
+    else:
+        q = (title or "flights").strip()
+
     return f"https://www.google.com/travel/flights?q={quote(q)}"
 
 
@@ -51,11 +89,12 @@ def enrich_activity_urls(trip: Trip, activities: list[dict]) -> None:
         date_part = start[:10] if isinstance(start, str) and len(start) >= 10 else (trip.start or "")
 
         if cat == "flight":
-            parts = [title, date_part]
-            if origin_city and dest_str:
-                parts.append(f"{origin_city} to {dest_str}")
-            q = " ".join(p for p in parts if p).strip()
-            act["info_url"] = google_flights_search_url(q)
+            act["info_url"] = google_flights_search_url(
+                origin=origin_city,
+                destination=dest_str,
+                date=date_part,
+                title=title,
+            )
             continue
 
         if places_configured() and dest_str and title:

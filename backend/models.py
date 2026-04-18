@@ -41,6 +41,7 @@ class Trip(Base):
     planning_phase = Column(String, nullable=False, default=PlanningPhase.gathering.value)
     planning_context = Column(JSON, nullable=False, default=lambda: {})
     initial_request = Column(Text, nullable=True)
+    user_id = Column(String, nullable=True)  # Supabase user UUID
 
     activities = relationship("Activity", back_populates="trip", cascade="all, delete-orphan")
     messages = relationship("ChatMessage", back_populates="trip", cascade="all, delete-orphan")
@@ -157,6 +158,22 @@ class PlanningContextPatch(BaseModel):
     """Partial merge into trip.planning_context (gathering or confirming phase)."""
 
     planning_context: dict[str, Any]
+
+
+class ProfileUpdate(BaseModel):
+    display_name: Optional[str] = None
+    home_city: Optional[str] = None
+    preferred_currency: Optional[str] = None
+    travel_style_tags: Optional[list[str]] = None
+
+
+class ProfileResponse(BaseModel):
+    user_id: str
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+    home_city: Optional[str] = None
+    preferred_currency: Optional[str] = None
+    travel_style_tags: list[str] = Field(default_factory=list)
 
 
 class TasteSignalsBody(BaseModel):

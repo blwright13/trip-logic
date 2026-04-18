@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase";
+
 const API_BASE = "/api";
 
 export interface Activity {
@@ -25,6 +27,22 @@ export interface Trip {
   planning_phase?: PlanningPhase;
   planning_context?: Record<string, unknown>;
   initial_request?: string | null;
+}
+
+export interface Profile {
+  user_id: string;
+  email: string | null;
+  display_name: string | null;
+  home_city: string | null;
+  preferred_currency: string | null;
+  travel_style_tags: string[];
+}
+
+export interface ProfileUpdate {
+  display_name?: string;
+  home_city?: string;
+  preferred_currency?: string;
+  travel_style_tags?: string[];
 }
 
 export interface ChatMessage {
@@ -59,9 +77,15 @@ class ApiError extends Error {
 }
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const bearer = session?.access_token;
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
     headers: {
       "Content-Type": "application/json",
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       ...options?.headers,
     },
     ...options,
@@ -149,6 +173,12 @@ export interface TastePlaceSuggestion {
   name: string | null;
   address: string | null;
   rating: number | null;
+  price_level?: string | number | null;
+  photo_url?: string | null;
+  description?: string | null;
+  google_maps_uri?: string | null;
+  website_uri?: string | null;
+  synthetic?: boolean;
   types: string[];
   query: string;
 }
@@ -186,6 +216,23 @@ export async function patchPlanningContext(
   return fetchApi<Trip>(`/trips/${tripId}/planning-context`, {
     method: "PATCH",
     body: JSON.stringify({ planning_context: planningContext }),
+  });
+}
+
+export async function claimTrip(tripId: number): Promise<Trip> {
+  return fetchApi<Trip>(`/trips/${tripId}/claim`, {
+    method: "PATCH",
+  });
+}
+
+export async function getProfile(): Promise<Profile> {
+  return fetchApi<Profile>("/profile");
+}
+
+export async function updateProfile(data: ProfileUpdate): Promise<Profile> {
+  return fetchApi<Profile>("/profile", {
+    method: "PATCH",
+    body: JSON.stringify(data),
   });
 }
 

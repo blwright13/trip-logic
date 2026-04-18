@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, ArrowRightLeft, Trash2, Lightbulb, Loader2, ExternalLink } from "lucide-react";
+import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, Trash2, Lightbulb, Loader2, ExternalLink } from "lucide-react";
 
 export interface Activity {
   id: string;
@@ -189,9 +189,9 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
                         {alternativesLoading === activity.id ? (
                           <Loader2 size={10} className="animate-spin" />
                         ) : (
-                          <ArrowRightLeft size={10} />
+                          <Lightbulb size={10} />
                         )}
-                        Swap
+                        Alternatives
                       </button>
                       <button
                         onClick={() => onRemoveActivity(currentDayIndex, activity.id)}
@@ -199,18 +199,6 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
                       >
                         <Trash2 size={10} />
                         Remove
-                      </button>
-                      <button
-                        onClick={() => onShowAlternatives(activity.id)}
-                        disabled={alternativesLoading === activity.id}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                      >
-                        {alternativesLoading === activity.id ? (
-                          <Loader2 size={10} className="animate-spin" />
-                        ) : (
-                          <Lightbulb size={10} />
-                        )}
-                        Alternatives
                       </button>
                     </div>
                   </div>

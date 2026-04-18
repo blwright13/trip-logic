@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -13,6 +14,12 @@ SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 
 def configured() -> bool:
     return bool(os.getenv("GOOGLE_PLACES_API_KEY", "").strip())
+
+
+def photo_proxy_url(photo_name: str | None) -> str | None:
+    if not photo_name:
+        return None
+    return f"/api/places/photo?name={quote(photo_name, safe='')}"
 
 
 def search_places(text_query: str, max_results: int = 5) -> str:
@@ -35,7 +42,7 @@ def search_places(text_query: str, max_results: int = 5) -> str:
         "X-Goog-Api-Key": key,
         "X-Goog-FieldMask": (
             "places.displayName,places.formattedAddress,places.priceLevel,places.rating,places.types,"
-            "places.googleMapsUri,places.websiteUri"
+            "places.googleMapsUri,places.websiteUri,places.photos"
         ),
     }
 
@@ -54,12 +61,18 @@ def search_places(text_query: str, max_results: int = 5) -> str:
         if not isinstance(p, dict):
             continue
         name = (p.get("displayName") or {}).get("text") if isinstance(p.get("displayName"), dict) else None
+        photos = p.get("photos") if isinstance(p.get("photos"), list) else []
+        first_photo_name = None
+        if photos and isinstance(photos[0], dict):
+            first_photo_name = photos[0].get("name")
         slim.append(
             {
                 "name": name,
                 "address": p.get("formattedAddress"),
                 "rating": p.get("rating"),
                 "price_level": p.get("priceLevel"),  # PRICE_LEVEL_* enum string in API v1
+                "photo_name": first_photo_name,
+                "photo_url": photo_proxy_url(first_photo_name),
                 "types": (p.get("types") or [])[:5],
                 "google_maps_uri": p.get("googleMapsUri"),
                 "website_uri": p.get("websiteUri"),
@@ -87,6 +100,9 @@ def _synthetic_taste_options(dest: str) -> list[dict[str, Any]]:
             "name": f"Upscale dinner & wine in {d}",
             "address": None,
             "rating": None,
+            "price_level": "PRICE_LEVEL_EXPENSIVE",
+            "photo_url": None,
+            "description": "A higher-touch dining choice with reservations, wine, and a slower evening pace.",
             "types": ["restaurant", "food"],
             "query": "synthetic_style",
             "synthetic": True,
@@ -96,6 +112,9 @@ def _synthetic_taste_options(dest: str) -> list[dict[str, Any]]:
             "name": f"Major museums & landmarks in {d}",
             "address": None,
             "rating": None,
+            "price_level": "PRICE_LEVEL_MODERATE",
+            "photo_url": None,
+            "description": "A culture-heavy stop built around museums, monuments, and signature landmarks.",
             "types": ["museum", "tourist_attraction"],
             "query": "synthetic_style",
             "synthetic": True,
@@ -105,6 +124,9 @@ def _synthetic_taste_options(dest: str) -> list[dict[str, Any]]:
             "name": f"Parks, walks & outdoor time in {d}",
             "address": None,
             "rating": None,
+            "price_level": "PRICE_LEVEL_FREE",
+            "photo_url": None,
+            "description": "A lower-cost outdoor option focused on parks, walks, views, and unstructured time.",
             "types": ["park", "natural_feature"],
             "query": "synthetic_style",
             "synthetic": True,
@@ -168,6 +190,10 @@ def taste_suggestions_for_destinations(
                     "name": name,
                     "address": address,
                     "rating": p.get("rating"),
+                    "price_level": p.get("price_level"),
+                    "photo_url": p.get("photo_url"),
+                    "google_maps_uri": p.get("google_maps_uri"),
+                    "website_uri": p.get("website_uri"),
                     "types": (p.get("types") or [])[:5],
                     "query": q,
                 }

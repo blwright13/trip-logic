@@ -126,6 +126,22 @@ export function usePostPlanningConfirm(tripId: number | undefined) {
   });
 }
 
+export function useClaimTrip(tripId: number | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => {
+      if (tripId === undefined) throw new Error("No trip id");
+      return api.claimTrip(tripId);
+    },
+    onSuccess: () => {
+      if (tripId === undefined) return;
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+      queryClient.invalidateQueries({ queryKey: ["trips"] });
+    },
+  });
+}
+
 export function usePostPlanningTasteSignals(tripId: number | undefined) {
   const queryClient = useQueryClient();
 

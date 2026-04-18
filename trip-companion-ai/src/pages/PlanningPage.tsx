@@ -2,17 +2,21 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ChatPanel, { ChatMessage } from "@/components/ChatPanel";
+import TasteCheckCarousel from "@/components/TasteCheckCarousel";
 import TopNav from "@/components/TopNav";
 import {
   useTrip,
   useChatHistory,
   useSendPlanningMessage,
   usePostPlanningConfirm,
+  useClaimTrip,
   usePostPlanningTasteSignals,
   usePatchPlanningContext,
 } from "@/hooks/useTrip";
 import { getPlanningTasteSuggestions, type TastePlaceSuggestion } from "@/services/api";
-import { Loader2, Check, Circle, ThumbsDown, ThumbsUp } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
+import { Loader2, Check, Circle } from "lucide-react";
 
 const SLOT_LABELS: Record<string, string> = {
   destinations: "Destination",
@@ -23,6 +27,8 @@ const SLOT_LABELS: Record<string, string> = {
   origin: "Departing from",
   preferences: "Preferences",
 };
+
+const TASTE_SUGGESTIONS_CACHE_MS = 30 * 60 * 1000;
 
 function computeMissingSlots(ctx: Record<string, unknown> | undefined): string[] {
   if (!ctx) return ["destinations", "start", "end", "num_people", "budget", "origin"];
@@ -43,6 +49,17 @@ function isPlanningPhase(p: string | undefined): boolean {
   return p === "gathering" || p === "confirming";
 }
 
+function formatWrittenDate(value: unknown): string {
+  if (typeof value !== "string" || !value) return "";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 const PlanningPage = () => {
   const navigate = useNavigate();
   const { tripId } = useParams<{ tripId: string }>();
@@ -52,8 +69,10 @@ const PlanningPage = () => {
   const { data: chatData } = useChatHistory(tripIdNum);
   const sendPlanning = useSendPlanningMessage(tripIdNum);
   const postConfirm = usePostPlanningConfirm(tripIdNum);
+  const claimTrip = useClaimTrip(tripIdNum);
   const postTaste = usePostPlanningTasteSignals(tripIdNum);
   const patchContext = usePatchPlanningContext(tripIdNum);
+  const { user, openAuthModal } = useAuth();
 
   const [trip, setTrip] = useState({
     destination: "Loading...",
@@ -65,6 +84,8 @@ const PlanningPage = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [missingSlots, setMissingSlots] = useState<string[]>([]);
   const [tasteVotes, setTasteVotes] = useState<Record<string, "liked" | "disliked">>({});
+  const [pendingBuildAfterAuth, setPendingBuildAfterAuth] = useState(false);
+  const [photoRefreshAttemptedKey, setPhotoRefreshAttemptedKey] = useState<string | null>(null);
 
   const [reviewDest, setReviewDest] = useState("");
   const [reviewStart, setReviewStart] = useState("");
@@ -120,24 +141,63 @@ const PlanningPage = () => {
     }
   }, [chatData]);
 
+  useEffect(() => {
+    if (!pendingBuildAfterAuth || !user || !tripIdNum) return;
+    const run = async () => {
+      try {
+        await claimTrip.mutateAsync();
+        await postConfirm.mutateAsync();
+        setPendingBuildAfterAuth(false);
+      } catch (error) {
+        setPendingBuildAfterAuth(false);
+        toast.error(error instanceof Error ? error.message : "Could not claim trip");
+      }
+    };
+    run();
+  }, [claimTrip, pendingBuildAfterAuth, postConfirm, tripIdNum, user]);
+
   const tasteIntroSent = Boolean(ctx.taste_intro_sent);
   const tasteStepActive =
     phase === "gathering" &&
     ctx.taste_calibration_status === "pending" &&
     tasteIntroSent;
 
-  const { data: tasteData, isFetching: tasteLoading, isLoading: tasteQueryLoading } = useQuery({
-    queryKey: [
+  const tasteSuggestionsKey = useMemo(
+    () => [
       "tasteSuggestions",
       tripIdNum,
       ctx.taste_calibration_status,
       tasteIntroSent,
       String((ctx.destinations as string[] | undefined)?.join(",") ?? ""),
     ],
+    [ctx.taste_calibration_status, ctx.destinations, tasteIntroSent, tripIdNum]
+  );
+
+  const {
+    data: tasteData,
+    isFetching: tasteLoading,
+    isLoading: tasteQueryLoading,
+    refetch: refetchTasteSuggestions,
+  } = useQuery({
+    queryKey: tasteSuggestionsKey,
     queryFn: () => getPlanningTasteSuggestions(tripIdNum!),
     enabled: !!tripIdNum && tasteStepActive,
-    staleTime: 0,
+    staleTime: TASTE_SUGGESTIONS_CACHE_MS,
+    gcTime: TASTE_SUGGESTIONS_CACHE_MS,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    const suggestions = tasteData?.suggestions ?? [];
+    const refreshKey = JSON.stringify(tasteSuggestionsKey);
+    const hasLiveCards = tasteData?.configured && suggestions.some((suggestion) => !suggestion.synthetic);
+    const hasPhotos = suggestions.some((suggestion) => Boolean(suggestion.photo_url));
+    if (!hasLiveCards || hasPhotos || photoRefreshAttemptedKey === refreshKey) return;
+    setPhotoRefreshAttemptedKey(refreshKey);
+    void refetchTasteSuggestions();
+  }, [photoRefreshAttemptedKey, refetchTasteSuggestions, tasteData, tasteSuggestionsKey]);
 
   const allSlots = useMemo(
     () => ["destinations", "start", "end", "num_people", "budget", "origin"],
@@ -180,6 +240,21 @@ const PlanningPage = () => {
   );
 
   const handleChipClick = (chip: string) => handleSend(chip);
+
+  const handleBuildClick = async () => {
+    if (!tripIdNum) return;
+    if (!user) {
+      setPendingBuildAfterAuth(true);
+      openAuthModal({ mode: "signup", destination: tripData?.title ?? "your trip" });
+      return;
+    }
+    try {
+      await claimTrip.mutateAsync();
+      await postConfirm.mutateAsync();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not build itinerary");
+    }
+  };
 
   const toggleTasteVote = (place: TastePlaceSuggestion, vote: "liked" | "disliked") => {
     const id = place.id;
@@ -292,9 +367,24 @@ const PlanningPage = () => {
             onSend={handleSend}
             onTripUpdate={setTrip}
             onChipClick={handleChipClick}
+            showChips={false}
             showTripSummaryEditor={false}
             sendDisabled={sendPlanning.isPending || postConfirm.isPending}
             isAwaitingResponse={sendPlanning.isPending || postConfirm.isPending}
+            afterLastAssistantMessage={
+              tasteStepActive ? (
+                <TasteCheckCarousel
+                  suggestions={tasteData?.suggestions ?? []}
+                  votes={tasteVotes}
+                  isLoading={tasteLoading || tasteQueryLoading}
+                  configured={tasteData?.configured ?? true}
+                  isSubmitting={postTaste.isPending}
+                  onVote={toggleTasteVote}
+                  onContinue={() => submitTaste(false)}
+                  onSkip={() => submitTaste(true)}
+                />
+              ) : undefined
+            }
           />
         </div>
 
@@ -317,13 +407,13 @@ const PlanningPage = () => {
               {ctx.start && (
                 <li>
                   <span className="text-muted-foreground">From: </span>
-                  {String(ctx.start)}
+                  {formatWrittenDate(ctx.start)}
                 </li>
               )}
               {ctx.end && (
                 <li>
                   <span className="text-muted-foreground">To: </span>
-                  {String(ctx.end)}
+                  {formatWrittenDate(ctx.end)}
                 </li>
               )}
               {ctx.num_people != null && (
@@ -370,78 +460,6 @@ const PlanningPage = () => {
               })}
             </ul>
           </div>
-
-          {tasteStepActive && (
-            <div className="border-t border-border pt-4 space-y-3">
-              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Taste check</h2>
-              {tasteData?.configured === false && (
-                <p className="text-xs text-muted-foreground">
-                  Live venue names need GOOGLE_PLACES_API_KEY. Below are style prompts you can rate the same way.
-                </p>
-              )}
-              {(tasteLoading || tasteQueryLoading) && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading suggestions…
-                </div>
-              )}
-              {!tasteLoading && !tasteQueryLoading && tasteData?.configured && (tasteData?.suggestions?.length ?? 0) === 0 && (
-                <p className="text-xs text-amber-700 dark:text-amber-400">No suggestions returned — try Skip or check your Places API.</p>
-              )}
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {(tasteData?.suggestions ?? []).map((p) => (
-                  <div
-                    key={p.id}
-                    className="rounded-md border border-border bg-background p-2 flex flex-col gap-1 text-xs"
-                  >
-                    <span className="font-medium text-foreground">{p.name ?? "Place"}</span>
-                    {p.address && <span className="text-muted-foreground">{p.address}</span>}
-                    <div className="flex gap-2 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => toggleTasteVote(p, "liked")}
-                        className={`inline-flex items-center gap-1 rounded px-2 py-1 border ${
-                          tasteVotes[p.id] === "liked"
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border"
-                        }`}
-                      >
-                        <ThumbsUp className="h-3.5 w-3.5" /> Like
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleTasteVote(p, "disliked")}
-                        className={`inline-flex items-center gap-1 rounded px-2 py-1 border ${
-                          tasteVotes[p.id] === "disliked"
-                            ? "border-destructive bg-destructive/10 text-destructive"
-                            : "border-border"
-                        }`}
-                      >
-                        <ThumbsDown className="h-3.5 w-3.5" /> Dislike
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  disabled={postTaste.isPending}
-                  onClick={() => submitTaste(false)}
-                  className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50"
-                >
-                  {postTaste.isPending ? "Saving…" : "Continue with my ratings"}
-                </button>
-                <button
-                  type="button"
-                  disabled={postTaste.isPending}
-                  onClick={() => submitTaste(true)}
-                  className="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground"
-                >
-                  Skip taste quiz
-                </button>
-              </div>
-            </div>
-          )}
 
           {phase === "confirming" && (
             <div className="border-t border-border pt-4 space-y-3">
@@ -513,11 +531,15 @@ const PlanningPage = () => {
               </button>
               <button
                 type="button"
-                disabled={postConfirm.isPending || computeMissingSlots(ctx as Record<string, unknown>).length > 0}
-                onClick={() => tripIdNum && postConfirm.mutate()}
+                disabled={
+                  postConfirm.isPending ||
+                  claimTrip.isPending ||
+                  computeMissingSlots(ctx as Record<string, unknown>).length > 0
+                }
+                onClick={handleBuildClick}
                 className="w-full rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50"
               >
-                {postConfirm.isPending ? "Building…" : "Build itinerary"}
+                {postConfirm.isPending || claimTrip.isPending ? "Building…" : "Build itinerary"}
               </button>
             </div>
           )}

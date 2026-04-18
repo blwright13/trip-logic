@@ -6,6 +6,7 @@ Itinerary generation runs only after explicit confirmation (see run_itinerary_ge
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -70,6 +71,17 @@ def _has_origin(ctx: dict) -> bool:
         return True
     iata = (ctx.get("origin_iata") or "").strip().upper()
     return len(iata) >= 3
+
+
+def _format_human_date(value: str) -> str:
+    """Format ISO date strings like 2026-06-01 to 'June 1, 2026'."""
+    if not value:
+        return value
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return value
+    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
 
 
 def compute_missing_slots(ctx: dict) -> list[str]:
@@ -162,7 +174,12 @@ def run_classifier(
   "missing_slots": ["destinations, start, end, num_people, budget, origin — list unknowns"]
 }"""
 
+    today_iso = datetime.now().date().isoformat()
+    today_human = _format_human_date(today_iso)
+
     prompt = f"""You extract and merge structured TRIP FACTS from a planning conversation.
+
+Current date context (authoritative): {today_human} ({today_iso})
 
 Current merged planning_context (may be empty): {json.dumps(prior_context)}
 Full transcript (most recent lines may be most important):
@@ -174,9 +191,10 @@ Task:
 1) Merge any NEW facts from the latest message into planning_context. Do not drop previously known facts unless the user corrects them.
 2) For destinations, return a list of strings (multi-city trips are allowed).
 3) Infer reasonable dates only if the user gave them explicitly or clearly implied; otherwise leave start/end null.
-4) Infer num_people and budget only when stated or clearly implied; else null.
-5) origin: where the traveler departs from (city/region). origin_iata only if the user gave a 3-letter airport code explicitly.
-6) List missing_slots among: destinations, start, end, num_people, budget, origin — for anything still unknown or ambiguous.
+4) If the user gives only month/day (no year), resolve the year using the current date context above so dates are reasonable and not in the distant past.
+5) Infer num_people and budget only when stated or clearly implied; else null.
+6) origin: where the traveler departs from (city/region). origin_iata only if the user gave a 3-letter airport code explicitly.
+7) List missing_slots among: destinations, start, end, num_people, budget, origin — for anything still unknown or ambiguous.
 
 Return JSON ONLY (no markdown) matching this shape:
 {schema_hint}"""
@@ -276,7 +294,7 @@ Return JSON only:
 def run_taste_intro_message(planning_context: dict) -> tuple[str, list[str]]:
     _ = planning_context
     return (
-        "Quick taste check: rate a few sample spots so I can match your style. Use the cards on the right, "
+        "Quick taste check: rate a few sample spots so I can match your style. Use the cards below, "
         "or skip if you prefer.",
         ["Skip taste quiz"],
     )
@@ -391,7 +409,8 @@ def run_itinerary_generation(db: Session, trip_id: int) -> tuple[str, list[str],
 
     content = (
         f"Your itinerary **{trip.title}** is ready! I've added activities from "
-        f"{trip.start} through {trip.end}. Open the planner to review and tweak details."
+        f"{_format_human_date(trip.start)} through {_format_human_date(trip.end)}. "
+        f"Open the planner to review and tweak details."
     )
     chips = ["Sounds great"]
     return content, chips, build_meta, True
