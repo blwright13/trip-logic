@@ -81,6 +81,7 @@ export interface SuggestionCard {
   description?: string | null;
   rating?: number | null;
   estimated_price?: string | null;
+  estimated_cost?: number | null;
   url?: string | null;
   location?: string | null;
   fit_reason?: string | null;

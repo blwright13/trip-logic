@@ -70,8 +70,27 @@ def _ensure_trip_user_id_column() -> None:
         pass
 
 
+def _ensure_chat_message_structured_columns() -> None:
+    """Add structured suggestion columns to chat_messages if missing."""
+    try:
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        if "chat_messages" not in tables:
+            return
+        cols = {c["name"] for c in inspector.get_columns("chat_messages")}
+        with engine.connect() as conn:
+            if "flight_options" not in cols:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN flight_options JSON"))
+            if "cards" not in cols:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN cards JSON"))
+            conn.commit()
+    except Exception:
+        pass
+
+
 def create_tables():
     """Create all tables in the database."""
     Base.metadata.create_all(bind=engine)
     _ensure_activity_info_url_column()
     _ensure_trip_user_id_column()
+    _ensure_chat_message_structured_columns()

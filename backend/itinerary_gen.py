@@ -86,7 +86,9 @@ Return a JSON object with this exact structure (no markdown, just valid JSON):
     ]
 }}
 
-Generate a realistic itinerary with 4-6 activities per day. Include flights at start/end, hotel check-ins, meals, and sightseeing activities."""
+Generate a realistic itinerary with 4-6 activities per day. Include flights at start/end, hotel check-ins, meals, and sightseeing activities.
+If an outbound (initial) flight exists, it must be the first activity in the itinerary.
+If a return flight exists, it must be the final activity in the itinerary."""
 
     try:
         text = _strip_json(complete_text(prompt))

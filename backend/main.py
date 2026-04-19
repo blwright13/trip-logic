@@ -2,6 +2,9 @@ import os
 import json
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
+from typing import Optional
+
+from pydantic import BaseModel
 
 import httpx
 from fastapi import FastAPI, HTTPException, Depends
@@ -43,6 +46,8 @@ from planning_graph import (
     run_planning_turn,
     seed_planning_context_from_initial_request,
 )
+from post_itinerary_graph import run_post_itinerary_turn
+from replacement_targeting import normalize_apply_mode, resolve_replacement_context
 
 load_dotenv()
 
@@ -135,12 +140,35 @@ def _extract_assistant_payload(text: str) -> tuple[str, list[str]] | None:
         if isinstance(parsed, dict) and ("content" in parsed or "chips" in parsed):
             embedded_payload = parsed
     if embedded_payload is None:
-        return None
+        return _extract_plain_text_chips(cleaned)
 
     return _normalize_assistant_payload(
         embedded_payload.get("content"),
         embedded_payload.get("chips"),
     )
+
+
+def _extract_plain_text_chips(text: str) -> tuple[str, list[str]] | None:
+    lines = (text or "").strip().splitlines()
+    chip_header_index = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower().rstrip(":") == "chips":
+            chip_header_index = idx
+            break
+    if chip_header_index is None:
+        return None
+
+    content = "\n".join(lines[:chip_header_index]).strip()
+    chips: list[str] = []
+    for line in lines[chip_header_index + 1 :]:
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        cleaned = cleaned.lstrip("-*").strip()
+        cleaned = cleaned.strip('"').strip("'").strip()
+        if cleaned:
+            chips.append(cleaned)
+    return _normalize_assistant_payload(content, chips)
 
 
 def _normalize_assistant_payload(content: object, chips: object) -> tuple[str, list[str]]:
@@ -343,6 +371,7 @@ You can call tools to make real changes:
 
 After making changes, briefly confirm what you did and offer 2-3 follow-up chips.
 Respond with JSON: {{"content": "...", "chips": ["...", "..."]}}
+Do not write a "Chips:" section in the content. Chips must only appear in the JSON chips array.
 If no changes were needed, still return that JSON with a helpful reply."""},
     ]
 
@@ -932,15 +961,24 @@ def send_chat_message(
     # Get chat history
     messages = db.query(ChatMessage).filter(ChatMessage.trip_id == trip_id).order_by(ChatMessage.created_at).all()
 
-    # Generate AI response
-    ai_response = generate_chat_response(trip, messages, chat_request.message, db)
+    # Generate AI response via post-itinerary LangGraph orchestrator.
+    # Fall back to the legacy tool-loop response on unexpected errors.
+    try:
+        ai_response = run_post_itinerary_turn(db, trip_id, chat_request.message)
+        if ai_response.get("delegate_to_legacy"):
+            ai_response = generate_chat_response(trip, messages, chat_request.message, db)
+    except Exception as exc:
+        print(f"post_itinerary_graph error: {exc}")
+        ai_response = generate_chat_response(trip, messages, chat_request.message, db)
 
     # Save AI message
     ai_msg = ChatMessage(
         trip_id=trip_id,
         role="assistant",
         content=ai_response["content"],
-        chips=ai_response.get("chips")
+        chips=ai_response.get("chips"),
+        flight_options=ai_response.get("flight_options"),
+        cards=ai_response.get("cards"),
     )
     db.add(ai_msg)
     db.commit()
@@ -952,10 +990,148 @@ def send_chat_message(
             role=ai_msg.role,
             content=ai_msg.content,
             chips=ai_msg.chips,
+            flight_options=ai_msg.flight_options,
+            cards=ai_msg.cards,
             created_at=ai_msg.created_at
         ),
         trip_updated=ai_response.get("trip_updated", False)
     )
+
+
+class ApplySuggestionRequest(BaseModel):
+    apply_mode: str  # "replace" | "add"
+    replace_activity_id: Optional[int] = None
+    replace_category: Optional[str] = None
+    target_date: Optional[str] = None  # YYYY-MM-DD
+    title: str
+    category: str
+    location: Optional[str] = None
+    cost: Optional[float] = 0
+    info_url: Optional[str] = None
+    duration: Optional[int] = 60
+
+
+@app.post("/api/trips/{trip_id}/suggestions/apply")
+def apply_suggestion(
+    trip_id: int,
+    body: ApplySuggestionRequest,
+    db: Session = Depends(get_db),
+    current_user: AuthUser | None = Depends(get_optional_user),
+):
+    """Apply a chat suggestion card to the itinerary (replace or add)."""
+    trip = _get_trip_or_404(db, trip_id)
+    _assert_trip_access(trip, current_user)
+
+    try:
+        category = CategoryEnum(body.category)
+    except ValueError:
+        category = CategoryEnum.sightseeing
+
+    apply_mode = normalize_apply_mode(body.apply_mode)
+    if apply_mode == "replace":
+        replacement_context = resolve_replacement_context(
+            db,
+            trip,
+            apply_mode=apply_mode,
+            replace_activity_id=body.replace_activity_id,
+            replace_category=body.replace_category,
+            target_date=body.target_date,
+        )
+        target = None
+        if replacement_context.replace_activity_id:
+            target = (
+                db.query(Activity)
+                .filter(Activity.id == replacement_context.replace_activity_id, Activity.trip_id == trip_id)
+                .first()
+            )
+        if not target:
+            raise HTTPException(
+                status_code=409,
+                detail="Could not identify the itinerary item to replace.",
+            )
+
+        target.title = body.title
+        target.category = category
+        if body.location is not None:
+            target.location = body.location
+        if body.cost is not None:
+            target.cost = body.cost
+        if body.info_url is not None:
+            target.info_url = body.info_url
+        if body.duration is not None:
+            target.duration = body.duration
+        db.commit()
+        db.refresh(target)
+        return {"activity_id": target.id, "mode": "replaced"}
+
+    # Explicit add mode.
+    insert_date = body.target_date or (trip.start or "")
+
+    _DEFAULT_TIMES: dict[str, str] = {
+        "food": "12:30:00",
+        "cafe": "09:00:00",
+        "hotel": "15:00:00",
+        "flight": "08:00:00",
+        "transport": "08:00:00",
+    }
+    default_time = _DEFAULT_TIMES.get(body.category, "10:00:00")
+
+    new_start: str | None = None
+
+    # If we know target date + category, reuse the existing same-category slot's time
+    # so the new item lands at the same time as what it conceptually parallels (e.g. another lunch at 12:30).
+    if insert_date and body.replace_category:
+        try:
+            replace_cat = CategoryEnum(body.replace_category)
+            ref_act = (
+                db.query(Activity)
+                .filter(
+                    Activity.trip_id == trip_id,
+                    Activity.category == replace_cat,
+                    Activity.start >= f"{insert_date}T00:00:00",
+                    Activity.start <= f"{insert_date}T23:59:59",
+                )
+                .order_by(Activity.start)
+                .first()
+            )
+            if ref_act:
+                new_start = ref_act.start
+        except ValueError:
+            pass
+
+    if not new_start:
+        if insert_date:
+            new_start = f"{insert_date}T{default_time}"
+        else:
+            last_act = (
+                db.query(Activity)
+                .filter(Activity.trip_id == trip_id)
+                .order_by(Activity.start.desc())
+                .first()
+            )
+            if last_act:
+                try:
+                    last_dt = datetime.fromisoformat(last_act.start)
+                    new_start = (last_dt + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    new_start = f"{trip.start}T{default_time}"
+            else:
+                new_start = f"{trip.start}T{default_time}"
+
+    new_act = Activity(
+        trip_id=trip_id,
+        title=body.title,
+        category=category,
+        start=new_start,
+        duration=body.duration or 60,
+        cost=body.cost or 0,
+        location=body.location,
+        info_url=body.info_url,
+    )
+    db.add(new_act)
+    db.commit()
+    db.refresh(new_act)
+    return {"activity_id": new_act.id, "mode": "added"}
 
 
 @app.get("/api/trips/{trip_id}/chat", response_model=list[ChatMessageResponse])
@@ -1161,6 +1337,12 @@ def get_alternatives(
         f"other {activity.category.value} options"
     )
 
+    existing_titles = [
+        a.title for a in db.query(Activity).filter(Activity.trip_id == trip_id).all()
+        if a.title
+    ]
+    existing_block = "\n".join(f"- {t}" for t in existing_titles) if existing_titles else "(none)"
+
     prompt = f"""Suggest 3 alternatives to replace "{activity.title}" in {trip.title}.
 
 Current activity:
@@ -1169,7 +1351,10 @@ Current activity:
 - Cost: ${activity.cost}
 - Trip budget: ${trip.budget}
 
-IMPORTANT: All 3 alternatives MUST be {same_category_note}. Do not suggest activities from a different category.
+Already in itinerary (do NOT suggest any of these):
+{existing_block}
+
+IMPORTANT: All 3 alternatives MUST be {same_category_note}. Do not suggest activities from a different category. Do not suggest anything already in the itinerary above.
 
 Return JSON (no markdown):
 {{

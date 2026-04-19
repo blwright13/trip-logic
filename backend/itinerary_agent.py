@@ -151,7 +151,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def _dispatch_tool(name: str, arguments: str) -> str:
+def _dispatch_tool(name: str, arguments: str, meta: dict[str, Any] | None = None) -> str:
     try:
         args = json.loads(arguments) if arguments else {}
     except json.JSONDecodeError:
@@ -169,9 +169,16 @@ def _dispatch_tool(name: str, arguments: str) -> str:
             adults=int(args.get("adults", 2)),
         )
     if name == "search_flights":
+        origin = (args.get("origin_iata") or "").upper().strip()
+        dest = (args.get("dest_iata") or "").upper().strip()
+        if meta is not None and len(origin) == 3 and len(dest) == 3:
+            if not meta.get("origin_iata"):
+                meta["origin_iata"] = origin
+            if not meta.get("destination_iata"):
+                meta["destination_iata"] = dest
         return serpapi.search_flights(
-            origin_iata=args.get("origin_iata", ""),
-            dest_iata=args.get("dest_iata", ""),
+            origin_iata=origin,
+            dest_iata=dest,
             departure_date=args.get("departure_date", ""),
             airline_code=args.get("airline_code", ""),
             return_date=args.get("return_date", ""),
@@ -222,6 +229,10 @@ COST GROUNDING:
   - Flights: use SerpAPI prices directly; estimate from distance/class if unavailable
   - Hotels: use the actual rate_per_night_usd from search_hotels results; include 1 hotel activity per night at that price
   - Total of all activity costs must fall within 85–105% of the stated budget
+
+FLIGHT ORDERING:
+  - If an outbound (initial) flight exists, it must be the first activity in the itinerary.
+  - If a return flight exists, it must be the final activity in the itinerary.
 
 OUTPUT: Respond with ONLY a single valid JSON object (no markdown fences) matching this schema:
 {
@@ -318,7 +329,7 @@ If a tool returns an error, continue with reasonable estimates."""
                 }
             )
             for tc in msg.tool_calls:
-                result = _dispatch_tool(tc.function.name, tc.function.arguments or "{}")
+                result = _dispatch_tool(tc.function.name, tc.function.arguments or "{}", meta)
                 messages.append(
                     {
                         "role": "tool",

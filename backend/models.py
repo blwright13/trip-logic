@@ -71,6 +71,8 @@ class ChatMessage(Base):
     role = Column(String, nullable=False)  # "user" or "assistant"
     content = Column(String, nullable=False)
     chips = Column(JSON, nullable=True)  # List of suggestion chips
+    flight_options = Column(JSON, nullable=True)
+    cards = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     trip = relationship("Trip", back_populates="messages")
@@ -126,10 +128,45 @@ class ChatRequest(BaseModel):
 
 
 class ChatMessageResponse(BaseModel):
+    class FlightOption(BaseModel):
+        airline: str
+        flight_number: Optional[str] = None
+        departure_time: str
+        arrival_time: str
+        departure_airport: Optional[str] = None
+        arrival_airport: Optional[str] = None
+        duration_minutes: Optional[int] = None
+        stops: Optional[int] = None
+        price_usd: Optional[float] = None
+        booking_url: Optional[str] = None
+        tag: Optional[str] = None
+        apply_mode: Optional[str] = None
+        replace_activity_id: Optional[int] = None
+        replace_category: Optional[str] = None
+        target_date: Optional[str] = None
+
+    class SuggestionCard(BaseModel):
+        type: str
+        title: str
+        image_url: Optional[str] = None
+        description: Optional[str] = None
+        rating: Optional[float] = None
+        estimated_price: Optional[str] = None
+        estimated_cost: Optional[float] = None
+        url: Optional[str] = None
+        location: Optional[str] = None
+        fit_reason: Optional[str] = None
+        apply_mode: Optional[str] = None
+        replace_activity_id: Optional[int] = None
+        replace_category: Optional[str] = None
+        target_date: Optional[str] = None
+
     id: int
     role: str
     content: str
     chips: Optional[list[str]] = None
+    flight_options: Optional[list[FlightOption]] = None
+    cards: Optional[list[SuggestionCard]] = None
     created_at: datetime
 
     class Config:

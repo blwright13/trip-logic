@@ -1,6 +1,7 @@
 import { useMemo, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2, ExternalLink } from "lucide-react";
+import { jsPDF } from "jspdf";
 import TopNav from "@/components/TopNav";
 import { Button } from "@/components/ui/button";
 import { useTrip, useItinerary } from "@/hooks/useTrip";
@@ -77,22 +78,155 @@ const TripSummaryPage = () => {
   }, [tripData, tripId, navigate]);
 
   const handleExport = () => {
-    const lines = [`Trip to ${trip.destination}`, `${trip.startDate} — ${trip.endDate}`, `Budget: $${trip.budget}`, `Travelers: ${trip.travelers}`, ""];
+    const doc = new jsPDF({ unit: "pt", format: "letter" });
+    const PAGE_W = doc.internal.pageSize.getWidth();
+    const PAGE_H = doc.internal.pageSize.getHeight();
+    const MARGIN = 48;
+    const CONTENT_W = PAGE_W - MARGIN * 2;
+    let y = MARGIN;
+
+    const checkPage = (needed: number) => {
+      if (y + needed > PAGE_H - MARGIN) {
+        doc.addPage();
+        y = MARGIN;
+      }
+    };
+
+    // ── Header bar ──────────────────────────────────────────────────────────
+    doc.setFillColor(15, 118, 110); // teal-700
+    doc.rect(0, 0, PAGE_W, 72, "F");
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    doc.text(`Trip to ${trip.destination}`, MARGIN, 32);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.text(
+      `${trip.startDate}  –  ${trip.endDate}   ·   ${trip.travelers} traveler${trip.travelers !== 1 ? "s" : ""}   ·   Budget $${trip.budget.toLocaleString()}`,
+      MARGIN,
+      52,
+    );
+
+    y = 96;
+
+    // ── Daily schedule ───────────────────────────────────────────────────────
+    const categoryEmoji: Record<string, string> = {
+      flight: "✈", hotel: "🏨", food: "🍽", cafe: "☕",
+      sightseeing: "📷", transport: "🗺", shopping: "🛍", entertainment: "🎵",
+    };
+
     days.forEach((d) => {
-      lines.push(`--- Day ${d.day} (${d.date}) ---`);
+      checkPage(52);
+
+      // Day header
+      doc.setFillColor(240, 253, 250); // teal-50
+      doc.roundedRect(MARGIN, y, CONTENT_W, 26, 4, 4, "F");
+      doc.setTextColor(15, 118, 110);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text(`Day ${d.day}`, MARGIN + 10, y + 17);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(d.date, MARGIN + 52, y + 17);
+      y += 34;
+
       d.activities.forEach((a) => {
-        lines.push(`  ${a.time}  ${a.name} — ${a.location} ($${a.cost})`);
+        checkPage(22);
+        const emoji = categoryEmoji[a.category] ?? "•";
+        const label = `${emoji}  ${a.time}   ${a.name}`;
+        const costStr = `$${a.cost}`;
+
+        doc.setTextColor(30, 41, 59); // slate-800
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+
+        // Truncate name if needed so it doesn't overlap the cost column
+        const costW = doc.getTextWidth(costStr) + 8;
+        const labelLines = doc.splitTextToSize(label, CONTENT_W - costW - 8);
+        const lineH = 14;
+        doc.text(labelLines, MARGIN + 8, y + lineH);
+
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(15, 118, 110);
+        doc.text(costStr, MARGIN + CONTENT_W - costW + 8, y + lineH, { align: "right" });
+
+        if (a.location) {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8.5);
+          doc.setTextColor(148, 163, 184); // slate-400
+          doc.text(a.location, MARGIN + 8, y + lineH + 11);
+          y += 13;
+        }
+
+        y += lineH + 5;
       });
-      lines.push("");
+
+      y += 10;
     });
-    lines.push(`Total: $${totalCost}`);
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${trip.destination.replace(/[^a-z0-9]/gi, "-")}-itinerary.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    // ── Cost breakdown ────────────────────────────────────────────────────────
+    checkPage(60 + costByCategory.length * 18);
+
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
+    y += 18;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(15, 118, 110);
+    doc.text("Cost Breakdown", MARGIN, y);
+    y += 16;
+
+    costByCategory.forEach(([cat, cost]) => {
+      checkPage(16);
+      const label = categoryLabels[cat] ?? cat;
+      const pct = totalCost > 0 ? Math.round((cost / totalCost) * 100) : 0;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(30, 41, 59);
+      doc.text(`${label}`, MARGIN + 8, y);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`${pct}%`, MARGIN + 130, y);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(15, 118, 110);
+      doc.text(`$${cost}`, MARGIN + CONTENT_W, y, { align: "right" });
+      y += 16;
+    });
+
+    y += 6;
+    doc.setDrawColor(226, 232, 240);
+    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
+    y += 14;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(30, 41, 59);
+    doc.text("Total", MARGIN + 8, y);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`$${totalCost.toLocaleString()}`, MARGIN + CONTENT_W, y, { align: "right" });
+    y += 14;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(148, 163, 184);
+    const budgetNote = totalCost <= trip.budget ? "Under budget ✓" : "Over budget ⚠";
+    doc.text(`Budget: $${trip.budget.toLocaleString()}  ·  ${budgetNote}`, MARGIN + 8, y);
+
+    // ── Footer on every page ──────────────────────────────────────────────────
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`TripLogic  ·  Page ${i} of ${pageCount}`, PAGE_W / 2, PAGE_H - 20, { align: "center" });
+    }
+
+    doc.save(`${trip.destination.replace(/[^a-z0-9]/gi, "-")}-itinerary.pdf`);
   };
 
   // Loading state

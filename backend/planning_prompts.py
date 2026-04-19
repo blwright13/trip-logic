@@ -111,8 +111,12 @@ def context_to_generation_prompt(trip: Trip) -> str:
     except (KeyError, ValueError, TypeError):
         pass
 
-    pace = ctx.get("pace", "").lower()
-    density = _PACE_DENSITY.get(pace, "5–6 activities per day (3 meals + 2–3 experiences)")
-    parts.append(f"Target activity density: {density}")
+    pace = str(ctx.get("pace") or "").lower().strip()
+    if pace in _PACE_DENSITY:
+        parts.append(f"Target activity density: {_PACE_DENSITY[pace]}")
+    else:
+        parts.append(
+            "Target activity density: choose an appropriate pace from trip length, budget, and traveler preferences."
+        )
 
     return "\n".join(parts)

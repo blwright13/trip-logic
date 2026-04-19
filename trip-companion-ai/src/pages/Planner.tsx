@@ -13,7 +13,9 @@ import {
   useReorderActivities,
   useGetAlternatives,
   useUpdateActivity,
+  useApplySuggestion,
 } from "@/hooks/useTrip";
+import type { ApplySuggestionRequest } from "@/services/api";
 import { Button } from "@/components/ui/button";
 import { FileText, Loader2 } from "lucide-react";
 import type { AlternativeActivity } from "@/services/api";
@@ -32,6 +34,7 @@ const Planner = () => {
   const reorderActivitiesMutation = useReorderActivities(tripIdNum!);
   const getAlternativesMutation = useGetAlternatives(tripIdNum!);
   const updateActivityMutation = useUpdateActivity(tripIdNum!);
+  const applySuggestionMutation = useApplySuggestion(tripIdNum!);
 
   // Local state derived from API data
   const [trip, setTrip] = useState({
@@ -93,6 +96,8 @@ const Planner = () => {
         role: msg.role === "assistant" ? "ai" : "user",
         text: msg.content,
         chips: msg.chips || undefined,
+        flightOptions: msg.flight_options || undefined,
+        cards: msg.cards || undefined,
       }));
       setMessages(formattedMessages);
     }
@@ -124,6 +129,8 @@ const Planner = () => {
         role: "ai",
         text: response.message.content,
         chips: response.message.chips || undefined,
+        flightOptions: response.message.flight_options || undefined,
+        cards: response.message.cards || undefined,
       };
       setMessages((prev) => [...prev, aiMsg]);
     } catch {
@@ -132,6 +139,10 @@ const Planner = () => {
   };
 
   const handleChipClick = (chip: string) => handleSend(chip);
+
+  const handleApplySuggestion = (payload: ApplySuggestionRequest) => {
+    applySuggestionMutation.mutate(payload);
+  };
 
   const handleReorder = (_dayIndex: number, activities: Activity[]) => {
     // Extract activity IDs in new order and send to backend
@@ -226,6 +237,7 @@ const Planner = () => {
             onSend={handleSend}
             onTripUpdate={setTrip}
             onChipClick={handleChipClick}
+            onApplySuggestion={handleApplySuggestion}
             showChips={false}
             sendDisabled={sendMessageMutation.isPending}
             isAwaitingResponse={sendMessageMutation.isPending}

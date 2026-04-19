@@ -99,6 +99,45 @@ _STYLE_META = [
     },
 ]
 
+_STYLE_VALUE_LABELS = {
+    "laid_back": "Laid-back & relaxed",
+    "balanced": "Balanced",
+    "jam_packed": "Jam-packed",
+    "relaxed": "Laid-back & relaxed",
+    "moderate": "Balanced",
+    "packed": "Jam-packed",
+    "budget": "Budget",
+    "comfortable": "Comfortable",
+    "upscale": "Upscale",
+    "luxury": "Luxury",
+    "street_food": "Street food & local",
+    "mid_range": "Mid-range",
+    "fine_dining": "Fine dining",
+    "outdoorsy": "Outdoorsy & active",
+    "cultural": "Cultural & museums",
+    "nightlife": "Nightlife & social",
+    "mix": "Mix of everything",
+    "early_bird": "Early bird",
+    "night_owl": "Night owl",
+    "flexible": "Flexible",
+    "off_beaten_path": "Off the beaten path",
+    "popular": "Popular highlights",
+    "popular_highlights": "Popular highlights",
+}
+
+_STYLE_SUMMARY_FIELDS = [
+    ("transportation_to", "Getting there"),
+    ("transportation_around", "Getting around"),
+    ("pace", "Pace"),
+    ("accommodation_quality", "Accommodation"),
+    ("dining_style", "Dining"),
+    ("activity_vibe", "Activities"),
+    ("schedule_preference", "Schedule"),
+    ("tourist_preference", "Vibe"),
+    ("must_haves", "Must-haves"),
+    ("avoid", "Avoid"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,6 +174,16 @@ def _format_human_date(value: str) -> str:
     except ValueError:
         return value
     return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+
+
+def _format_style_value(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    normalized = text.lower().replace("-", "_").replace(" ", "_")
+    return _STYLE_VALUE_LABELS.get(normalized, text)
 
 
 def compute_missing_slots(ctx: dict) -> list[str]:
@@ -230,12 +279,12 @@ def run_classifier(
     "interests": ["optional tags"],
     "transportation_to": "how the user wants to get to the destination (airline preference, train, etc.) or null",
     "transportation_around": "how the user prefers to get around locally once there or null",
-    "pace": "relaxed|moderate|packed or null",
-    "accommodation_quality": "budget|comfortable|upscale|luxury or null",
-    "dining_style": "street_food|mid_range|fine_dining or null",
-    "activity_vibe": "outdoorsy|cultural|nightlife|mix or null",
-    "schedule_preference": "early_bird|night_owl|flexible or null",
-    "tourist_preference": "off_beaten_path|popular|mix or null",
+    "pace": "free text describing trip pace or null",
+    "accommodation_quality": "free text describing accommodation preference or null",
+    "dining_style": "free text describing dining preference or null",
+    "activity_vibe": "free text describing activity vibe or null",
+    "schedule_preference": "free text describing schedule preference or null",
+    "tourist_preference": "free text describing tourist preference or null",
     "must_haves": "free text of must-do experiences; use \"none\" if user explicitly said nothing/no/n-a; null only if never asked",
     "avoid": "dietary restrictions, mobility needs, or things to avoid; use \"none\" if user explicitly said nothing/no/n-a; null only if never asked",
     "notes": "short freeform constraints"
@@ -346,35 +395,78 @@ Return JSON only:
 
 def run_confirmation_summary_message(planning_context: dict) -> tuple[str, list[str]]:
     chips = ["Looks good — build my trip!", "I need to change something"]
+    base_parts = []
+    destinations = planning_context.get("destinations")
+    if destinations:
+        base_parts.append(f"Destination: {', '.join(destinations)}")
+    origin = (planning_context.get("origin") or "").strip()
+    origin_iata = (planning_context.get("origin_iata") or "").strip().upper()
+    if origin or (origin_iata and len(origin_iata) >= 3):
+        origin_text = " · ".join([x for x in [origin, origin_iata] if x])
+        base_parts.append(f"Departing from: {origin_text}")
+    if planning_context.get("start"):
+        base_parts.append(f"Start date: {_format_human_date(str(planning_context['start']))}")
+    if planning_context.get("end"):
+        base_parts.append(f"End date: {_format_human_date(str(planning_context['end']))}")
+    if planning_context.get("num_people") is not None:
+        base_parts.append(f"Travelers: {planning_context['num_people']}")
+    if planning_context.get("budget") is not None:
+        base_parts.append(f"Budget: ${float(planning_context['budget']):,.0f}")
+
+    style_ctx: dict[str, str] = {}
+    for field, _label in _STYLE_SUMMARY_FIELDS:
+        raw = planning_context.get(field)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if not value or value.lower() == "none":
+            continue
+        style_ctx[field] = _format_style_value(raw)
+
     if not llm_configured():
-        parts = []
-        if planning_context.get("destinations"):
-            parts.append(f"you're heading to {', '.join(planning_context['destinations'])}")
-        if planning_context.get("start") and planning_context.get("end"):
-            parts.append(f"from {planning_context['start']} to {planning_context['end']}")
-        if planning_context.get("num_people") is not None:
-            parts.append(f"with {planning_context['num_people']} traveler(s)")
-        if planning_context.get("budget") is not None:
-            parts.append(f"on a ${int(planning_context['budget']):,} budget")
-        return "Here's what I have: " + ", ".join(parts) + ". Does this look right?", chips
+        if not base_parts:
+            return "I don't have enough trip details yet. Share anything you'd like me to include.", chips
+        style_parts = [style_ctx[f] for f, _ in _STYLE_SUMMARY_FIELDS if f in style_ctx]
+        summary = " ".join(base_parts)
+        if style_parts:
+            summary += " — " + ", ".join(style_parts) + "."
+        return summary + " Does everything look right?", chips
 
-    prompt = f"""Summarize this trip planning context for the traveler in a single friendly paragraph (4–6 sentences).
-Cover all known fields: destinations, departure city, dates, number of travelers, budget, transportation preference, pace, accommodation quality, dining style, activity vibe, schedule preference, local-vs-touristy preference, must-haves, and anything to avoid. Skip fields that are null or unknown.
-End by asking if this looks right and inviting them to say what to change if not.
+    prompt = f"""Write a short, friendly 2-3 sentence paragraph summarising a planned trip. Write it naturally, as if you're recapping the trip to the traveller — weave the details together rather than listing them. End with a single sentence asking if everything looks right.
 
-Context JSON:
-{json.dumps(planning_context)}
+Core trip facts:
+{json.dumps(base_parts, ensure_ascii=False)}
 
-Return JSON only:
-{{"content": "paragraph summary", "chips": ["Looks good — build my trip!", "I need to change something"]}}"""
+Captured style/preferences (only explicitly provided by the user; do not infer missing values):
+{json.dumps(style_ctx, ensure_ascii=False)}
+
+Requirements:
+- Return JSON only with keys: content (string) and chips (array).
+- Flowing prose only — no bullet points, no headers, no em-dashes used as list separators.
+- Mention all core facts (destination, dates, travelers, budget, departure city).
+- Weave in any captured style/preferences naturally; skip fields not present.
+- Do NOT invent values not present in the data above.
+- End with a confirmation question.
+
+Return JSON:
+{{"content":"...","chips":["Looks good — build my trip!","I need to change something"]}}"""
 
     try:
         text = _strip_json(complete_text(prompt))
         data = json.loads(text)
-        return data.get("content", "Here's what I have for your trip. Does this look right?"), data.get("chips") or chips
+        content = (data.get("content") or "").strip()
+        if content:
+            return content, data.get("chips") or chips
     except Exception as e:
         print(f"Confirmation summary error: {e}")
-        return "Here's what I have for your trip — does everything look right?", chips
+
+    if not base_parts:
+        return "I don't have enough trip details yet. Share anything you'd like me to include.", chips
+    style_parts = [style_ctx[f] for f, _ in _STYLE_SUMMARY_FIELDS if f in style_ctx]
+    summary = " ".join(base_parts)
+    if style_parts:
+        summary += " — " + ", ".join(style_parts) + "."
+    return summary + " Does everything look right?", chips
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +517,14 @@ def run_itinerary_generation(db: Session, trip_id: int) -> tuple[str, list[str],
     parsed, build_meta = run_itinerary_agent_with_tools(trip)
     replace_trip_activities(db, trip, parsed)
     trip.planning_phase = PlanningPhase.complete.value
+
+    ctx = dict(trip.planning_context or {})
+    if build_meta.get("origin_iata") and not ctx.get("origin_iata"):
+        ctx["origin_iata"] = build_meta["origin_iata"]
+    if build_meta.get("destination_iata") and not ctx.get("destination_iata"):
+        ctx["destination_iata"] = build_meta["destination_iata"]
+    trip.planning_context = ctx
+
     db.commit()
     db.refresh(trip)
 

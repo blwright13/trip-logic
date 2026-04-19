@@ -328,6 +328,22 @@ export function useGetAlternatives(tripId: number) {
   });
 }
 
+export function useApplySuggestion(tripId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: api.ApplySuggestionRequest) => api.applySuggestion(tripId, body),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["itinerary", tripId] });
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+      toast.success(data.mode === "replaced" ? "Activity replaced!" : "Activity added!");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to apply suggestion");
+    },
+  });
+}
+
 export function useCreateActivity(tripId: number) {
   const queryClient = useQueryClient();
 
