@@ -226,6 +226,7 @@ const Planner = () => {
             onSend={handleSend}
             onTripUpdate={setTrip}
             onChipClick={handleChipClick}
+            showChips={false}
             sendDisabled={sendMessageMutation.isPending}
             isAwaitingResponse={sendMessageMutation.isPending}
           />

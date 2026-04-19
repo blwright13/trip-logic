@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, Trash2, Lightbulb, Loader2, ExternalLink } from "lucide-react";
+import { Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, GripVertical, Lock, Trash2, Lightbulb, Loader2, ExternalLink } from "lucide-react";
 
 export interface Activity {
   id: string;
@@ -28,6 +28,8 @@ interface ItineraryPanelProps {
   onShowAlternatives: (activityId: string) => void;
   alternativesLoading?: string | null;
 }
+
+const FIXED_CATEGORIES = new Set<Activity["category"]>(["flight", "hotel"]);
 
 const categoryIcons: Record<Activity["category"], typeof Utensils> = {
   food: Utensils,
@@ -69,16 +71,33 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
   };
 
   const handleDragOver = (e: React.DragEvent, idx: number) => {
+    if (!currentDay || FIXED_CATEGORIES.has(currentDay.activities[idx].category)) return;
     e.preventDefault();
     setOverIdx(idx);
   };
 
   const handleDrop = (idx: number) => {
     if (dragItem.current === null || !currentDay) return;
-    const items = [...currentDay.activities];
-    const [moved] = items.splice(dragItem.current, 1);
-    items.splice(idx, 0, moved);
-    onReorder(currentDayIndex, items);
+    const target = currentDay.activities[idx];
+    if (FIXED_CATEGORIES.has(target.category)) return;
+
+    // Reorder only among draggable activities; fixed ones keep their start times
+    const draggable = currentDay.activities.filter((a) => !FIXED_CATEGORIES.has(a.category));
+    const src = currentDay.activities[dragItem.current];
+    const srcIdx = draggable.indexOf(src);
+    const dstIdx = draggable.indexOf(target);
+    if (srcIdx === -1 || dstIdx === -1 || srcIdx === dstIdx) {
+      dragItem.current = null;
+      setDragIdx(null);
+      setOverIdx(null);
+      return;
+    }
+
+    const reordered = [...draggable];
+    const [moved] = reordered.splice(srcIdx, 1);
+    reordered.splice(dstIdx, 0, moved);
+    onReorder(currentDayIndex, reordered);
+
     dragItem.current = null;
     setDragIdx(null);
     setOverIdx(null);
@@ -122,15 +141,16 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
           const isDragging = dragIdx === idx;
           const isOver = overIdx === idx && dragIdx !== idx;
 
+          const isFixed = FIXED_CATEGORIES.has(activity.category);
           return (
             <div
               key={activity.id}
               className={`flex gap-3 transition-opacity ${isDragging ? "opacity-40" : ""}`}
-              draggable
-              onDragStart={() => handleDragStart(idx)}
+              draggable={!isFixed}
+              onDragStart={!isFixed ? () => handleDragStart(idx) : undefined}
               onDragOver={(e) => handleDragOver(e, idx)}
               onDrop={() => handleDrop(idx)}
-              onDragEnd={handleDragEnd}
+              onDragEnd={!isFixed ? handleDragEnd : undefined}
             >
               {/* Timeline dot + line */}
               <div className="flex flex-col items-center">
@@ -147,10 +167,16 @@ const ItineraryPanel = ({ days, selectedDay, onSelectDay, totalBudget, onReorder
                 }`}
               >
                 <div className="flex items-start gap-2">
-                  {/* Drag handle */}
-                  <div className="pt-0.5 cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-                    <GripVertical size={14} />
-                  </div>
+                  {/* Drag handle / lock */}
+                  {isFixed ? (
+                    <div className="pt-0.5 text-muted-foreground/30" title="Position locked">
+                      <Lock size={12} />
+                    </div>
+                  ) : (
+                    <div className="pt-0.5 cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                      <GripVertical size={14} />
+                    </div>
+                  )}
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">

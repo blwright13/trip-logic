@@ -42,11 +42,11 @@ const TopNav = ({ variant = "light", darkMode, onToggleDark }: TopNavProps) => {
               left: 0,
               right: 0,
               zIndex: 50,
-              height: "3.75rem",
+              height: "4.5rem",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: "0 1.5rem",
+              padding: "0 2rem",
               background: darkMode ? "rgba(12,10,8,0.85)" : "rgba(255,255,255,0.88)",
               borderBottom: darkMode
                 ? "1px solid rgba(255,255,255,0.07)"
@@ -55,11 +55,11 @@ const TopNav = ({ variant = "light", darkMode, onToggleDark }: TopNavProps) => {
               transition: "background 0.3s, border-color 0.3s",
             }
           : {
-              height: "3.75rem",
+              height: "4.5rem",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: "0 1.5rem",
+              padding: "0 2rem",
               borderBottom: "1px solid var(--border)",
               background: "var(--card)",
             }
@@ -82,8 +82,8 @@ const TopNav = ({ variant = "light", darkMode, onToggleDark }: TopNavProps) => {
       >
         <div
           style={{
-            width: "2rem",
-            height: "2rem",
+            width: "2.25rem",
+            height: "2.25rem",
             borderRadius: "0.5rem",
             background: "linear-gradient(135deg, #E8632A, #C8501A)",
             display: "flex",
@@ -91,12 +91,12 @@ const TopNav = ({ variant = "light", darkMode, onToggleDark }: TopNavProps) => {
             justifyContent: "center",
           }}
         >
-          <Compass size={16} color="#fff" />
+          <Compass size={18} color="#fff" />
         </div>
         <span
           style={{
             fontWeight: 700,
-            fontSize: "1rem",
+            fontSize: "1.0625rem",
             letterSpacing: "-0.01em",
             color: isOverlay ? (darkMode ? "#F0EBE5" : "#1A1512") : "var(--foreground)",
           }}
@@ -139,18 +139,60 @@ const TopNav = ({ variant = "light", darkMode, onToggleDark }: TopNavProps) => {
         )}
 
         {!user ? (
-          <div className="flex items-center gap-2">
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <button
               type="button"
               onClick={() => openAuthModal({ mode: "signin" })}
-              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground"
+              style={{
+                borderRadius: "0.5rem",
+                border: isOverlay
+                  ? darkMode
+                    ? "1px solid rgba(255,255,255,0.25)"
+                    : "1px solid rgba(0,0,0,0.18)"
+                  : "1px solid var(--border)",
+                padding: "0.375rem 0.875rem",
+                fontSize: "0.8125rem",
+                fontWeight: 500,
+                cursor: "pointer",
+                background: "transparent",
+                color: isOverlay
+                  ? darkMode
+                    ? "#F0EBE5"
+                    : "#1A1512"
+                  : "var(--foreground)",
+                transition: "background 0.15s, border-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = isOverlay
+                  ? darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"
+                  : "var(--secondary)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+              }}
             >
               Log in
             </button>
             <button
               type="button"
               onClick={() => openAuthModal({ mode: "signup" })}
-              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+              style={{
+                borderRadius: "0.5rem",
+                border: "none",
+                padding: "0.375rem 0.875rem",
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                background: "#E8632A",
+                color: "#fff",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#C8501A";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#E8632A";
+              }}
             >
               Sign up
             </button>

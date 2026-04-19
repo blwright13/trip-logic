@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import TopNav from "@/components/TopNav";
@@ -25,6 +26,7 @@ const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"];
 const ProfilePage = () => {
   const { user, sendPasswordReset, signOut } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["profile"],
@@ -49,6 +51,7 @@ const ProfilePage = () => {
     onSuccess: (profile) => {
       queryClient.setQueryData(["profile"], profile);
       toast.success("Profile updated");
+      navigate("/");
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Could not save profile");

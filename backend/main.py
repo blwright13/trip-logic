@@ -18,7 +18,7 @@ from auth import (
     preload_jwks,
 )
 from database import get_db, create_tables
-from llm import complete_text, llm_configured
+from llm import complete_text, llm_configured, openai_client, OPENAI_MODEL
 from models import (
     Trip, Activity, ChatMessage, CategoryEnum, PlanningPhase,
     TripCreate, TripUpdate, TripResponse, ActivityResponse,
@@ -111,6 +111,48 @@ def _strip_json_text(text: str) -> str:
     return stripped
 
 
+def _extract_assistant_payload(text: str) -> tuple[str, list[str]] | None:
+    """Best-effort parse of assistant JSON, including embedded JSON in mixed output."""
+    cleaned = _strip_json_text(text)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            content = parsed.get("content")
+            chips = parsed.get("chips")
+            return _normalize_assistant_payload(content, chips)
+    except Exception:
+        pass
+
+    decoder = json.JSONDecoder()
+    embedded_payload = None
+    for idx, ch in enumerate(cleaned):
+        if ch != "{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(cleaned[idx:])
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and ("content" in parsed or "chips" in parsed):
+            embedded_payload = parsed
+    if embedded_payload is None:
+        return None
+
+    return _normalize_assistant_payload(
+        embedded_payload.get("content"),
+        embedded_payload.get("chips"),
+    )
+
+
+def _normalize_assistant_payload(content: object, chips: object) -> tuple[str, list[str]]:
+    text = str(content).strip() if content is not None else "Done!"
+    if not text:
+        text = "Done!"
+    chip_list: list[str] = []
+    if isinstance(chips, list):
+        chip_list = [c.strip() for c in chips if isinstance(c, str) and c.strip()]
+    return text, chip_list
+
+
 def _add_ai_taste_descriptions(suggestions: list[dict]) -> list[dict]:
     """Add one-sentence expectation blurbs for taste cards when the LLM is configured."""
     pending = [s for s in suggestions if isinstance(s, dict) and not s.get("description")]
@@ -196,66 +238,209 @@ def _profile_from_user(user: AuthUser) -> ProfileResponse:
     )
 
 
-def generate_chat_response(trip: Trip, messages: list[ChatMessage], user_message: str) -> dict:
-    """Generate AI response for chat."""
-    if not llm_configured():
+def _chat_tool_definitions() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_places",
+                "description": "Find real restaurants, attractions, or POIs to suggest as replacements or additions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text_query": {"type": "string", "description": "e.g. 'best ramen in Tokyo' or 'rooftop bars in Paris'"},
+                    },
+                    "required": ["text_query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_activity",
+                "description": "Modify an existing activity on the itinerary. Call this when the user asks to change a specific activity.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "activity_id": {"type": "integer", "description": "The id of the activity to update"},
+                        "title": {"type": "string"},
+                        "location": {"type": "string"},
+                        "cost": {"type": "number"},
+                        "start": {"type": "string", "description": "ISO datetime e.g. 2026-06-15T12:30:00"},
+                        "duration": {"type": "integer", "description": "Duration in minutes"},
+                        "category": {"type": "string", "enum": ["flight", "hotel", "food", "sightseeing", "entertainment", "cafe", "shopping", "transport"]},
+                    },
+                    "required": ["activity_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_activity",
+                "description": "Add a new activity to the itinerary.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "category": {"type": "string", "enum": ["flight", "hotel", "food", "sightseeing", "entertainment", "cafe", "shopping", "transport"]},
+                        "start": {"type": "string", "description": "ISO datetime e.g. 2026-06-15T14:00:00"},
+                        "duration": {"type": "integer", "description": "Duration in minutes"},
+                        "cost": {"type": "number"},
+                        "location": {"type": "string"},
+                    },
+                    "required": ["title", "category", "start", "duration", "cost"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_activity",
+                "description": "Remove an activity from the itinerary.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "activity_id": {"type": "integer", "description": "The id of the activity to remove"},
+                    },
+                    "required": ["activity_id"],
+                },
+            },
+        },
+    ]
+
+
+def generate_chat_response(trip: Trip, messages: list[ChatMessage], user_message: str, db) -> dict:
+    """Generate AI response for post-build itinerary chat, with tools to mutate activities."""
+    if not llm_configured() or not openai_client:
         return {
-            "content": "I'd be happy to help you plan your trip! Unfortunately, the AI service is not configured. Please set OPENAI_API_KEY.",
+            "content": "The AI service is not configured. Please set OPENAI_API_KEY.",
             "chips": ["Try again later"],
-            "trip_updated": False
+            "trip_updated": False,
         }
 
-    # Build conversation history
-    history = []
-    for msg in messages[-10:]:  # Last 10 messages for context
-        history.append(f"{msg.role}: {msg.content}")
+    # Build activity index for the LLM
+    activity_lines = []
+    for a in sorted(trip.activities, key=lambda x: x.start):
+        activity_lines.append(
+            f"  id={a.id} | {a.start[:10]} {a.start[11:16] if len(a.start) > 10 else ''} | "
+            f"{a.category.value} | {a.title} | {a.location or 'n/a'} | ${a.cost}"
+        )
+    activities_block = "\n".join(activity_lines) if activity_lines else "  (none)"
 
-    # Build trip context
-    activities_summary = []
-    for activity in trip.activities[:20]:  # Limit for context
-        activities_summary.append(f"- {activity.title} ({activity.category.value}) at {activity.location}")
+    history_msgs: list[dict] = [
+        {"role": "system", "content": f"""You are a travel assistant helping refine an itinerary for "{trip.title}".
+Trip: {trip.start} → {trip.end} | {trip.num_people} travelers | ${trip.budget} budget
 
-    prompt = f"""You are a helpful travel planning assistant for a trip to {trip.title}.
+Current itinerary (use these IDs when calling tools):
+{activities_block}
 
-Trip details:
-- Dates: {trip.start} to {trip.end}
-- Travelers: {trip.num_people}
-- Budget: ${trip.budget}
-- Current activities: {chr(10).join(activities_summary) if activities_summary else 'None yet'}
+You can call tools to make real changes:
+- update_activity: change title, location, time, cost, or category of an existing activity
+- add_activity: insert a new activity
+- delete_activity: remove an activity
+- search_places: look up real venues before suggesting or applying a change
 
-Recent conversation:
-{chr(10).join(history) if history else 'No previous messages'}
+After making changes, briefly confirm what you did and offer 2-3 follow-up chips.
+Respond with JSON: {{"content": "...", "chips": ["...", "..."]}}
+If no changes were needed, still return that JSON with a helpful reply."""},
+    ]
 
-User: {user_message}
+    # Append recent conversation history (last 10 turns)
+    for msg in messages[-10:]:
+        role = "assistant" if msg.role == "assistant" else "user"
+        history_msgs.append({"role": role, "content": msg.content})
 
-Respond helpfully and concisely. At the end, suggest 2-3 follow-up options the user might want.
+    # Current user turn
+    history_msgs.append({"role": "user", "content": user_message})
 
-Return JSON (no markdown):
-{{
-    "content": "Your helpful response here",
-    "chips": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
-}}"""
+    tools = _chat_tool_definitions()
+    trip_updated = False
+    max_rounds = 6
 
-    try:
-        text = complete_text(prompt)
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
-        result = json.loads(text)
-        return {
-            "content": result.get("content", "I understand! Let me help you with that."),
-            "chips": result.get("chips", ["Tell me more", "Show alternatives"]),
-            "trip_updated": False
-        }
-    except Exception as e:
-        print(f"Chat generation error: {e}")
-        return {
-            "content": "I'd be happy to help you adjust your itinerary! What specific changes would you like to make?",
-            "chips": ["Add more activities", "Change dates", "Adjust budget"],
-            "trip_updated": False
-        }
+    from integrations import google_places
+
+    for _ in range(max_rounds):
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=history_msgs,
+            tools=tools,
+            tool_choice="auto",
+            temperature=0.5,
+        )
+        msg = response.choices[0].message
+
+        if msg.tool_calls:
+            history_msgs.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"}}
+                    for tc in msg.tool_calls
+                ],
+            })
+            for tc in msg.tool_calls:
+                args = json.loads(tc.function.arguments or "{}")
+                result = "{}"
+                if tc.function.name == "search_places":
+                    result = google_places.search_places(args.get("text_query", ""))
+                elif tc.function.name == "update_activity":
+                    act = db.query(Activity).filter(Activity.id == args["activity_id"], Activity.trip_id == trip.id).first()
+                    if act:
+                        for field in ("title", "location", "cost", "start", "duration"):
+                            if field in args:
+                                setattr(act, field, args[field])
+                        if "category" in args:
+                            act.category = CategoryEnum(args["category"])
+                        db.commit()
+                        trip_updated = True
+                        result = json.dumps({"ok": True, "activity_id": act.id})
+                    else:
+                        result = json.dumps({"error": "activity not found"})
+                elif tc.function.name == "add_activity":
+                    new_act = Activity(
+                        trip_id=trip.id,
+                        title=args["title"],
+                        category=CategoryEnum(args["category"]),
+                        start=args["start"],
+                        duration=args.get("duration", 60),
+                        cost=args.get("cost", 0),
+                        location=args.get("location"),
+                    )
+                    db.add(new_act)
+                    db.commit()
+                    db.refresh(new_act)
+                    trip_updated = True
+                    result = json.dumps({"ok": True, "activity_id": new_act.id})
+                elif tc.function.name == "delete_activity":
+                    act = db.query(Activity).filter(Activity.id == args["activity_id"], Activity.trip_id == trip.id).first()
+                    if act:
+                        db.delete(act)
+                        db.commit()
+                        trip_updated = True
+                        result = json.dumps({"ok": True})
+                    else:
+                        result = json.dumps({"error": "activity not found"})
+                history_msgs.append({"role": "tool", "tool_call_id": tc.id, "content": result[:4000]})
+            continue
+
+        # Final text response
+        text = (msg.content or "").strip()
+        parsed_payload = _extract_assistant_payload(text)
+        if parsed_payload is not None:
+            content, chips = parsed_payload
+            return {
+                "content": content,
+                "chips": chips,
+                "trip_updated": trip_updated,
+            }
+        return {"content": text, "chips": [], "trip_updated": trip_updated}
+
+    return {
+        "content": "I ran into a problem processing that request. Could you rephrase?",
+        "chips": [],
+        "trip_updated": trip_updated,
+    }
 
 
 # --- Endpoints ---
@@ -664,7 +849,20 @@ def claim_trip(
 
 @app.get("/api/profile", response_model=ProfileResponse)
 def get_profile(current_user: AuthUser = Depends(get_current_user)):
-    return _profile_from_user(current_user)
+    admin = get_supabase_admin_client()
+    fresh = admin.auth.admin.get_user_by_id(current_user.user_id)
+    user = getattr(fresh, "user", None)
+    metadata = getattr(user, "user_metadata", None) if user else {}
+    email = getattr(user, "email", None) if user else current_user.email
+    tags = (metadata or {}).get("travel_style_tags") if isinstance(metadata, dict) else None
+    return ProfileResponse(
+        user_id=current_user.user_id,
+        email=email,
+        display_name=(metadata or {}).get("display_name") if isinstance(metadata, dict) else None,
+        home_city=(metadata or {}).get("home_city") if isinstance(metadata, dict) else None,
+        preferred_currency=(metadata or {}).get("preferred_currency") if isinstance(metadata, dict) else None,
+        travel_style_tags=tags if isinstance(tags, list) else [],
+    )
 
 
 @app.patch("/api/profile", response_model=ProfileResponse)
@@ -735,7 +933,7 @@ def send_chat_message(
     messages = db.query(ChatMessage).filter(ChatMessage.trip_id == trip_id).order_by(ChatMessage.created_at).all()
 
     # Generate AI response
-    ai_response = generate_chat_response(trip, messages, chat_request.message)
+    ai_response = generate_chat_response(trip, messages, chat_request.message, db)
 
     # Save AI message
     ai_msg = ChatMessage(
@@ -905,18 +1103,17 @@ def reorder_activities(
 
     activity_ids = reorder_request.activity_ids
 
-    # Fetch all activities in the order they currently exist
     activities = db.query(Activity).filter(Activity.id.in_(activity_ids)).all()
     if len(activities) != len(activity_ids):
         raise HTTPException(status_code=400, detail="Some activity IDs not found")
 
-    # Get current start times in order
     activity_map = {a.id: a for a in activities}
-    current_start_times = [activity_map[aid].start for aid in activity_ids]
 
-    # Assign start times based on new order
+    # Take the existing time slots sorted chronologically, then assign them
+    # to activities in the new requested order.
+    sorted_times = sorted(a.start for a in activities)
     for i, aid in enumerate(activity_ids):
-        activity_map[aid].start = current_start_times[i]
+        activity_map[aid].start = sorted_times[i]
 
     db.commit()
     return {"message": "Activities reordered"}

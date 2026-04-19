@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -23,6 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
+import { getProfile } from "@/services/api";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const YOUTUBE_VIDEO_ID = "dQw4w9WgXcQ"; // ← replace with your video ID
@@ -272,34 +274,52 @@ function SearchBar({
   C: Colors;
   hero?: boolean;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [query]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      onSubmit(e as unknown as React.FormEvent);
+    }
+  };
+
   return (
     <form
       onSubmit={onSubmit}
       style={{
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
         gap: "0.625rem",
         background: C.bg,
         border: `1.5px solid ${C.border}`,
         borderRadius: hero ? "1rem" : "0.875rem",
-        padding: hero ? "0.75rem 0.75rem 0.75rem 1.25rem" : "0.55rem 0.55rem 0.55rem 1rem",
+        padding: hero ? "0.875rem 0.75rem 0.875rem 1.25rem" : "0.55rem 0.55rem 0.55rem 1rem",
         boxShadow: hero
           ? `0 4px 24px ${C.border}, 0 1px 2px rgba(0,0,0,0.04)`
           : "none",
         width: "100%",
         transition: "border-color 0.2s, box-shadow 0.2s",
       }}
-      onFocus={() => {}}
     >
       <Search
         size={hero ? 20 : 17}
-        style={{ color: C.textFaint, flexShrink: 0 }}
+        style={{ color: C.textFaint, flexShrink: 0, marginTop: "0.2rem" }}
       />
-      <input
+      <textarea
+        ref={textareaRef}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={handleKeyDown}
         placeholder="Where do you want to go?"
         disabled={isPending}
+        rows={1}
         style={{
           flex: 1,
           background: "transparent",
@@ -308,6 +328,13 @@ function SearchBar({
           color: C.text,
           fontSize: hero ? "1.1rem" : "0.95rem",
           fontWeight: 400,
+          resize: "none",
+          overflow: "hidden",
+          lineHeight: 1.6,
+          paddingTop: 0,
+          paddingBottom: 0,
+          minHeight: hero ? "1.76rem" : "1.52rem",
+          fontFamily: "inherit",
         }}
         className="placeholder:text-[rgba(26,21,18,0.3)] dark:placeholder:text-[rgba(240,235,229,0.3)]"
       />
@@ -331,6 +358,7 @@ function SearchBar({
           opacity: isPending ? 0.65 : 1,
           transition: "opacity 0.2s, transform 0.15s",
           whiteSpace: "nowrap",
+          alignSelf: "flex-end",
         }}
         onMouseEnter={(e) => {
           if (!isPending) (e.currentTarget as HTMLElement).style.transform = "scale(1.02)";
@@ -1156,10 +1184,8 @@ function RecentTrips({
                   color: C.textFaint,
                   padding: "0.25rem",
                   borderRadius: "0.35rem",
-                  opacity: 0,
-                  transition: "color 0.15s, opacity 0.15s",
                 }}
-                className="group-hover:opacity-100"
+                className="opacity-0 group-hover:opacity-100 transition-opacity duration-150"
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.color = C.orange;
                 }}
@@ -1258,6 +1284,294 @@ function Footer({ C }: { C: Colors }) {
   );
 }
 
+// ─── TRIP CARD (shared) ──────────────────────────────────────────────────────
+function TripCard({
+  trip,
+  onNavigate,
+  onDelete,
+  C,
+}: {
+  trip: any;
+  onNavigate: (trip: any) => void;
+  onDelete: (e: React.MouseEvent, id: number) => void;
+  C: Colors;
+}) {
+  return (
+    <div
+      onClick={() => onNavigate(trip)}
+      className="group"
+      style={{
+        position: "relative",
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderRadius: "1rem",
+        padding: "1.25rem",
+        cursor: "pointer",
+        transition: "border-color 0.2s, box-shadow 0.2s",
+      }}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.borderColor = C.borderAccent;
+        el.style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)";
+      }}
+      onMouseLeave={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.borderColor = C.border;
+        el.style.boxShadow = "none";
+      }}
+    >
+      <button
+        type="button"
+        onClick={(e) => onDelete(e, trip.id)}
+        style={{
+          position: "absolute",
+          top: "0.75rem",
+          right: "0.75rem",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: C.textFaint,
+          padding: "0.25rem",
+          borderRadius: "0.35rem",
+        }}
+        className="opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = C.orange; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = C.textFaint; }}
+      >
+        <Trash2 size={13} />
+      </button>
+      <div
+        style={{
+          width: "2rem",
+          height: "2rem",
+          borderRadius: "0.5rem",
+          background: "rgba(232,99,42,0.1)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: "0.85rem",
+        }}
+      >
+        <MapPin size={14} style={{ color: C.orange }} />
+      </div>
+      <p
+        style={{
+          color: C.text,
+          fontWeight: 600,
+          fontSize: "0.85rem",
+          marginBottom: "0.2rem",
+          paddingRight: "1.25rem",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {trip.title}
+      </p>
+      <p style={{ color: C.textMuted, fontSize: "0.75rem" }}>
+        {formatDateRange(trip.start, trip.end)} · {getDuration(trip.start, trip.end)}
+      </p>
+      <p style={{ color: C.textFaint, fontSize: "0.72rem", marginTop: "0.1rem" }}>
+        {trip.activities.length} activities · ${trip.budget.toLocaleString()}
+      </p>
+    </div>
+  );
+}
+
+const DASHBOARD_TAGS = ["Weekend getaway", "Family vacation", "Solo adventure", "Honeymoon", "Road trip"];
+
+// ─── DASHBOARD (logged-in home) ───────────────────────────────────────────────
+function Dashboard({
+  dark,
+  setDark,
+  query,
+  setQuery,
+  onSearch,
+  onTag,
+  trips,
+  tripsLoading,
+  onNavigate,
+  onDelete,
+  isPending,
+  C,
+}: {
+  dark: boolean;
+  setDark: (v: boolean) => void;
+  query: string;
+  setQuery: (v: string) => void;
+  onSearch: (e: React.FormEvent) => void;
+  onTag: (t: string) => void;
+  trips: any[];
+  tripsLoading: boolean;
+  onNavigate: (trip: any) => void;
+  onDelete: (e: React.MouseEvent, id: number) => void;
+  isPending: boolean;
+  C: Colors;
+}) {
+  const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: getProfile });
+  const displayName = profile?.display_name || "there";
+
+  if (isPending) {
+    return (
+      <div
+        style={{
+          minHeight: "100svh",
+          background: C.bg,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "1rem",
+        }}
+      >
+        <Loader2 className="animate-spin" size={34} style={{ color: C.orange }} />
+        <p style={{ color: C.text, fontWeight: 500, fontSize: "1.05rem" }}>Building your itinerary…</p>
+        <p style={{ color: C.textMuted, fontSize: "0.85rem" }}>This may take a few seconds</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100svh", transition: "background 0.35s" }}>
+      <TopNav darkMode={dark} onToggleDark={() => setDark(!dark)} />
+
+      <main
+        style={{
+          maxWidth: "960px",
+          margin: "0 auto",
+          padding: "3.5rem 1.5rem 5rem",
+        }}
+      >
+        {/* Greeting + new trip */}
+        <div style={{ marginBottom: "3.5rem" }}>
+          <h1
+            style={{
+              fontFamily: "'Cormorant Garamond', Georgia, serif",
+              fontWeight: 600,
+              fontSize: "clamp(2rem, 4vw, 2.75rem)",
+              color: C.text,
+              lineHeight: 1.1,
+              letterSpacing: "-0.02em",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Welcome back,{" "}
+            <em style={{ fontStyle: "italic", color: C.orange }}>{displayName}</em>
+          </h1>
+          <p style={{ color: C.textMuted, fontSize: "1rem", marginBottom: "1.75rem" }}>
+            Where to next?
+          </p>
+          <SearchBar
+            query={query}
+            setQuery={setQuery}
+            onSubmit={onSearch}
+            isPending={isPending}
+            C={C}
+            hero
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "1rem" }}>
+            {DASHBOARD_TAGS.map((tag) => (
+              <button
+                key={tag}
+                onClick={() => onTag(tag)}
+                disabled={isPending}
+                style={{
+                  padding: "0.35rem 0.9rem",
+                  borderRadius: "999px",
+                  border: `1px solid ${C.border}`,
+                  background: C.surface,
+                  color: C.textMuted,
+                  fontSize: "0.8rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  transition: "border-color 0.18s, color 0.18s, background 0.18s",
+                }}
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget as HTMLElement;
+                  el.style.borderColor = C.borderAccent;
+                  el.style.color = C.orange;
+                  el.style.background = dark ? "rgba(232,99,42,0.07)" : "rgba(232,99,42,0.05)";
+                }}
+                onMouseLeave={(e) => {
+                  const el = e.currentTarget as HTMLElement;
+                  el.style.borderColor = C.border;
+                  el.style.color = C.textMuted;
+                  el.style.background = C.surface;
+                }}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* My Trips */}
+        <div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "1.25rem",
+            }}
+          >
+            <h2
+              style={{
+                color: C.text,
+                fontWeight: 700,
+                fontSize: "1.1rem",
+                letterSpacing: "-0.01em",
+              }}
+            >
+              My Trips
+            </h2>
+          </div>
+
+          {tripsLoading ? (
+            <div style={{ display: "flex", justifyContent: "center", padding: "3rem 0" }}>
+              <Loader2 className="animate-spin" size={28} style={{ color: C.orange }} />
+            </div>
+          ) : trips.length === 0 ? (
+            <div
+              style={{
+                textAlign: "center",
+                padding: "4rem 0",
+                color: C.textMuted,
+                border: `1px dashed ${C.border}`,
+                borderRadius: "1.25rem",
+              }}
+            >
+              <MapPin size={36} style={{ color: C.textFaint, margin: "0 auto 1rem", display: "block" }} />
+              <p style={{ marginBottom: "0.25rem", fontWeight: 500 }}>No trips yet</p>
+              <p style={{ fontSize: "0.875rem", color: C.textFaint }}>
+                Use the search bar above to plan your first trip
+              </p>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: "0.875rem",
+              }}
+            >
+              {trips.map((trip) => (
+                <TripCard
+                  key={trip.id}
+                  trip={trip}
+                  onNavigate={onNavigate}
+                  onDelete={onDelete}
+                  C={C}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
 // ─── ROOT ────────────────────────────────────────────────────────────────────
 const Landing = () => {
   const [dark, setDark] = useState(false);
@@ -1306,6 +1620,50 @@ const Landing = () => {
     nextParams.delete("auth");
     setSearchParams(nextParams, { replace: true });
   }, [navigate, openAuthModal, searchParams, setSearchParams, user]);
+
+  const deleteDialog = (
+    <AlertDialog open={tripToDelete !== null} onOpenChange={() => setTripToDelete(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Trip</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to delete this trip? This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={confirmDelete}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
+  if (user) {
+    return (
+      <>
+        <Dashboard
+          dark={dark}
+          setDark={setDark}
+          query={query}
+          setQuery={setQuery}
+          onSearch={handleSearch}
+          onTag={handleTag}
+          trips={trips}
+          tripsLoading={tripsLoading}
+          onNavigate={handleNavigate}
+          onDelete={handleDelete}
+          isPending={createTrip.isPending}
+          C={C}
+        />
+        {deleteDialog}
+      </>
+    );
+  }
 
   if (createTrip.isPending) {
     return (
@@ -1375,25 +1733,7 @@ const Landing = () => {
 
       <Footer C={C} />
 
-      <AlertDialog open={tripToDelete !== null} onOpenChange={() => setTripToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Trip</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete this trip? This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleteDialog}
     </div>
   );
 };

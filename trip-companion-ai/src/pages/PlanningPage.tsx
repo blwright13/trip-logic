@@ -1,8 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import ChatPanel, { ChatMessage } from "@/components/ChatPanel";
-import TasteCheckCarousel from "@/components/TasteCheckCarousel";
 import TopNav from "@/components/TopNav";
 import {
   useTrip,
@@ -10,13 +8,10 @@ import {
   useSendPlanningMessage,
   usePostPlanningConfirm,
   useClaimTrip,
-  usePostPlanningTasteSignals,
-  usePatchPlanningContext,
 } from "@/hooks/useTrip";
-import { getPlanningTasteSuggestions, type TastePlaceSuggestion } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Loader2, Check, Circle } from "lucide-react";
+import { Loader2, Circle } from "lucide-react";
 
 const SLOT_LABELS: Record<string, string> = {
   destinations: "Destination",
@@ -25,10 +20,86 @@ const SLOT_LABELS: Record<string, string> = {
   num_people: "Travelers",
   budget: "Budget",
   origin: "Departing from",
-  preferences: "Preferences",
+  preferences: "Getting there",
+  transportation_to: "Getting there",
+  transportation_around: "Getting around",
+  pace: "Pace",
+  accommodation_quality: "Accommodation",
+  dining_style: "Dining",
+  activity_vibe: "Activities",
+  schedule_preference: "Schedule",
+  tourist_preference: "Vibe",
+  must_haves: "Must-haves",
+  avoid: "Avoid",
 };
 
-const TASTE_SUGGESTIONS_CACHE_MS = 30 * 60 * 1000;
+const STYLE_VALUE_LABELS: Record<string, string> = {
+  // pace
+  laid_back: "Laid-back & relaxed",
+  balanced: "Balanced",
+  jam_packed: "Jam-packed",
+  // accommodation
+  budget: "Budget",
+  comfortable: "Comfortable",
+  upscale: "Upscale",
+  luxury: "Luxury",
+  // dining
+  street_food: "Street food & local",
+  mid_range: "Mid-range",
+  fine_dining: "Fine dining",
+  // activity
+  outdoorsy: "Outdoorsy & active",
+  cultural: "Cultural & museums",
+  nightlife: "Nightlife & social",
+  mix: "Mix of everything",
+  // schedule
+  early_bird: "Early bird",
+  night_owl: "Night owl",
+  flexible: "Flexible",
+  // vibe
+  off_beaten_path: "Off the beaten path",
+  popular_highlights: "Popular highlights",
+};
+
+const STYLE_SLOTS = [
+  "transportation_to",
+  "transportation_around",
+  "pace",
+  "accommodation_quality",
+  "dining_style",
+  "activity_vibe",
+  "schedule_preference",
+  "tourist_preference",
+  "must_haves",
+  "avoid",
+] as const;
+
+function formatStyleValue(value: unknown): string {
+  if (typeof value !== "string" || !value) return "";
+  const normalized = value.toLowerCase().replace(/[\s&-]+/g, "_");
+  return STYLE_VALUE_LABELS[normalized] || STYLE_VALUE_LABELS[value.toLowerCase()] || value;
+}
+
+function isSlotFilled(slot: string, ctx: Record<string, unknown>): boolean {
+  switch (slot) {
+    case "destinations": {
+      const d = ctx.destinations as string[] | undefined;
+      return Array.isArray(d) && d.length > 0;
+    }
+    case "start": return !!ctx.start;
+    case "end": return !!ctx.end;
+    case "num_people": return ctx.num_people !== undefined && ctx.num_people !== null;
+    case "budget": return ctx.budget !== undefined && ctx.budget !== null;
+    case "origin": {
+      const o = (ctx.origin as string | undefined)?.trim();
+      const i = (ctx.origin_iata as string | undefined)?.trim().toUpperCase();
+      return !!(o || (i && i.length >= 3));
+    }
+    case "transportation_to": return !!ctx.transportation_to;
+    case "transportation_around": return !!ctx.transportation_around;
+    default: return !!ctx[slot];
+  }
+}
 
 function computeMissingSlots(ctx: Record<string, unknown> | undefined): string[] {
   if (!ctx) return ["destinations", "start", "end", "num_people", "budget", "origin"];
@@ -70,8 +141,6 @@ const PlanningPage = () => {
   const sendPlanning = useSendPlanningMessage(tripIdNum);
   const postConfirm = usePostPlanningConfirm(tripIdNum);
   const claimTrip = useClaimTrip(tripIdNum);
-  const postTaste = usePostPlanningTasteSignals(tripIdNum);
-  const patchContext = usePatchPlanningContext(tripIdNum);
   const { user, openAuthModal } = useAuth();
 
   const [trip, setTrip] = useState({
@@ -83,16 +152,7 @@ const PlanningPage = () => {
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [missingSlots, setMissingSlots] = useState<string[]>([]);
-  const [tasteVotes, setTasteVotes] = useState<Record<string, "liked" | "disliked">>({});
   const [pendingBuildAfterAuth, setPendingBuildAfterAuth] = useState(false);
-  const [photoRefreshAttemptedKey, setPhotoRefreshAttemptedKey] = useState<string | null>(null);
-
-  const [reviewDest, setReviewDest] = useState("");
-  const [reviewStart, setReviewStart] = useState("");
-  const [reviewEnd, setReviewEnd] = useState("");
-  const [reviewOrigin, setReviewOrigin] = useState("");
-  const [reviewTravelers, setReviewTravelers] = useState("");
-  const [reviewBudget, setReviewBudget] = useState("");
 
   useEffect(() => {
     if (tripData?.planning_phase === "complete") {
@@ -116,17 +176,6 @@ const PlanningPage = () => {
   const ctx = (tripData?.planning_context || {}) as Record<string, unknown>;
   const phase = tripData?.planning_phase;
 
-  useEffect(() => {
-    if (tripData?.planning_phase === "confirming") {
-      const p = tripData.planning_context || {};
-      setReviewDest(Array.isArray(p.destinations) ? (p.destinations as string[]).join(", ") : "");
-      setReviewStart(String(p.start ?? ""));
-      setReviewEnd(String(p.end ?? ""));
-      setReviewOrigin(String(p.origin ?? ""));
-      setReviewTravelers(p.num_people != null ? String(p.num_people) : "");
-      setReviewBudget(p.budget != null ? String(p.budget) : "");
-    }
-  }, [tripData?.planning_phase, tripData?.planning_context]);
 
   useEffect(() => {
     if (chatData) {
@@ -156,48 +205,6 @@ const PlanningPage = () => {
     run();
   }, [claimTrip, pendingBuildAfterAuth, postConfirm, tripIdNum, user]);
 
-  const tasteIntroSent = Boolean(ctx.taste_intro_sent);
-  const tasteStepActive =
-    phase === "gathering" &&
-    ctx.taste_calibration_status === "pending" &&
-    tasteIntroSent;
-
-  const tasteSuggestionsKey = useMemo(
-    () => [
-      "tasteSuggestions",
-      tripIdNum,
-      ctx.taste_calibration_status,
-      tasteIntroSent,
-      String((ctx.destinations as string[] | undefined)?.join(",") ?? ""),
-    ],
-    [ctx.taste_calibration_status, ctx.destinations, tasteIntroSent, tripIdNum]
-  );
-
-  const {
-    data: tasteData,
-    isFetching: tasteLoading,
-    isLoading: tasteQueryLoading,
-    refetch: refetchTasteSuggestions,
-  } = useQuery({
-    queryKey: tasteSuggestionsKey,
-    queryFn: () => getPlanningTasteSuggestions(tripIdNum!),
-    enabled: !!tripIdNum && tasteStepActive,
-    staleTime: TASTE_SUGGESTIONS_CACHE_MS,
-    gcTime: TASTE_SUGGESTIONS_CACHE_MS,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-  });
-
-  useEffect(() => {
-    const suggestions = tasteData?.suggestions ?? [];
-    const refreshKey = JSON.stringify(tasteSuggestionsKey);
-    const hasLiveCards = tasteData?.configured && suggestions.some((suggestion) => !suggestion.synthetic);
-    const hasPhotos = suggestions.some((suggestion) => Boolean(suggestion.photo_url));
-    if (!hasLiveCards || hasPhotos || photoRefreshAttemptedKey === refreshKey) return;
-    setPhotoRefreshAttemptedKey(refreshKey);
-    void refetchTasteSuggestions();
-  }, [photoRefreshAttemptedKey, refetchTasteSuggestions, tasteData, tasteSuggestionsKey]);
 
   const allSlots = useMemo(
     () => ["destinations", "start", "end", "num_people", "budget", "origin"],
@@ -205,9 +212,10 @@ const PlanningPage = () => {
   );
 
   const progressSlots = useMemo(() => {
-    const pctx = tripData?.planning_context as Record<string, unknown> | undefined;
-    if (pctx?.extra_context_prompt_sent) {
-      return [...allSlots, "preferences"];
+    const pctx = (tripData?.planning_context || {}) as Record<string, unknown>;
+    const coreComplete = allSlots.every((s) => isSlotFilled(s, pctx));
+    if (coreComplete) {
+      return [...allSlots, ...STYLE_SLOTS];
     }
     return [...allSlots];
   }, [tripData?.planning_context, allSlots]);
@@ -256,50 +264,6 @@ const PlanningPage = () => {
     }
   };
 
-  const toggleTasteVote = (place: TastePlaceSuggestion, vote: "liked" | "disliked") => {
-    const id = place.id;
-    setTasteVotes((prev) => {
-      const next = { ...prev };
-      if (next[id] === vote) delete next[id];
-      else next[id] = vote;
-      return next;
-    });
-  };
-
-  const submitTaste = async (skip: boolean) => {
-    if (!tripIdNum) return;
-    const suggestions = tasteData?.suggestions ?? [];
-    const liked: TastePlaceSuggestion[] = [];
-    const disliked: TastePlaceSuggestion[] = [];
-    if (!skip) {
-      for (const p of suggestions) {
-        const v = tasteVotes[p.id];
-        if (v === "liked") liked.push(p);
-        if (v === "disliked") disliked.push(p);
-      }
-    }
-    try {
-      await postTaste.mutateAsync({ liked, disliked, skip });
-    } catch {
-      /* toast in hook */
-    }
-  };
-
-  const saveReviewEdits = async () => {
-    const p = (tripData?.planning_context || {}) as Record<string, unknown>;
-    const destinations = reviewDest
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    await patchContext.mutateAsync({
-      destinations: destinations.length ? destinations : p.destinations,
-      start: reviewStart || p.start,
-      end: reviewEnd || p.end,
-      origin: reviewOrigin || p.origin,
-      num_people: reviewTravelers ? parseInt(reviewTravelers, 10) : p.num_people,
-      budget: reviewBudget ? parseFloat(reviewBudget) : p.budget,
-    });
-  };
 
   if (tripLoading) {
     return (
@@ -372,17 +336,15 @@ const PlanningPage = () => {
             sendDisabled={sendPlanning.isPending || postConfirm.isPending}
             isAwaitingResponse={sendPlanning.isPending || postConfirm.isPending}
             afterLastAssistantMessage={
-              tasteStepActive ? (
-                <TasteCheckCarousel
-                  suggestions={tasteData?.suggestions ?? []}
-                  votes={tasteVotes}
-                  isLoading={tasteLoading || tasteQueryLoading}
-                  configured={tasteData?.configured ?? true}
-                  isSubmitting={postTaste.isPending}
-                  onVote={toggleTasteVote}
-                  onContinue={() => submitTaste(false)}
-                  onSkip={() => submitTaste(true)}
-                />
+              phase === "confirming" && ctx.confirmation_summary_sent ? (
+                <button
+                  type="button"
+                  disabled={postConfirm.isPending || claimTrip.isPending || computeMissingSlots(ctx as Record<string, unknown>).length > 0}
+                  onClick={handleBuildClick}
+                  className="mt-2 w-full rounded-xl bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold disabled:opacity-50 hover:bg-primary/90 transition-colors"
+                >
+                  {postConfirm.isPending || claimTrip.isPending ? "Building…" : "Build my trip"}
+                </button>
               ) : undefined
             }
           />
@@ -392,157 +354,72 @@ const PlanningPage = () => {
           <div>
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Captured so far</h2>
             <ul className="text-sm space-y-2 text-foreground">
-              {ctx.destinations && Array.isArray(ctx.destinations) && (ctx.destinations as string[]).length > 0 && (
+              {isSlotFilled("destinations", ctx) && (
                 <li>
                   <span className="text-muted-foreground">Places: </span>
                   {(ctx.destinations as string[]).join(", ")}
                 </li>
               )}
-              {(ctx.origin || ctx.origin_iata) && (
+              {isSlotFilled("origin", ctx) && (
                 <li>
                   <span className="text-muted-foreground">Departing from: </span>
                   {[ctx.origin, ctx.origin_iata].filter(Boolean).join(" · ")}
                 </li>
               )}
-              {ctx.start && (
+              {isSlotFilled("start", ctx) && (
                 <li>
                   <span className="text-muted-foreground">From: </span>
                   {formatWrittenDate(ctx.start)}
                 </li>
               )}
-              {ctx.end && (
+              {isSlotFilled("end", ctx) && (
                 <li>
                   <span className="text-muted-foreground">To: </span>
                   {formatWrittenDate(ctx.end)}
                 </li>
               )}
-              {ctx.num_people != null && (
+              {isSlotFilled("num_people", ctx) && (
                 <li>
                   <span className="text-muted-foreground">Travelers: </span>
                   {String(ctx.num_people)}
                 </li>
               )}
-              {ctx.budget != null && (
+              {isSlotFilled("budget", ctx) && (
                 <li>
                   <span className="text-muted-foreground">Budget: </span>${Number(ctx.budget).toLocaleString()}
                 </li>
               )}
-              {!ctx.destinations &&
-                !ctx.start &&
-                !ctx.end &&
-                ctx.num_people == null &&
-                ctx.budget == null && (
-                  <li className="text-muted-foreground text-xs">Nothing captured yet — say where you want to go.</li>
-                )}
+              {STYLE_SLOTS.filter((s) => isSlotFilled(s, ctx)).map((s) => (
+                <li key={s}>
+                  <span className="text-muted-foreground">{SLOT_LABELS[s]}: </span>
+                  {formatStyleValue(ctx[s])}
+                </li>
+              ))}
+              {progressSlots.every((s) => !isSlotFilled(s, ctx)) && (
+                <li className="text-muted-foreground text-xs">Nothing captured yet — say where you want to go.</li>
+              )}
             </ul>
           </div>
 
           <div>
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Progress</h2>
-            <ul className="space-y-2">
-              {progressSlots.map((slot) => {
-                const done =
-                  slot === "preferences"
-                    ? Object.prototype.hasOwnProperty.call(ctx, "extra_context")
-                    : !missingSlots.includes(slot);
-                return (
-                  <li key={slot} className="flex items-center gap-2 text-sm">
-                    {done ? (
-                      <Check className="h-4 w-4 text-primary shrink-0" />
-                    ) : (
+            {(() => {
+              const pending = progressSlots.filter((s) => !isSlotFilled(s, ctx));
+              return pending.length === 0 ? (
+                <p className="text-xs text-muted-foreground">All details captured!</p>
+              ) : (
+                <ul className="space-y-2">
+                  {pending.map((slot) => (
+                    <li key={slot} className="flex items-center gap-2 text-sm">
                       <Circle className="h-4 w-4 text-muted-foreground shrink-0" />
-                    )}
-                    <span className={done ? "text-foreground" : "text-muted-foreground"}>
-                      {SLOT_LABELS[slot] || slot}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+                      <span className="text-muted-foreground">{SLOT_LABELS[slot] || slot}</span>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
           </div>
 
-          {phase === "confirming" && (
-            <div className="border-t border-border pt-4 space-y-3">
-              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Review & edit</h2>
-              <p className="text-xs text-muted-foreground">Adjust fields, save, then build your itinerary.</p>
-              <label className="block text-xs space-y-1">
-                <span className="text-muted-foreground">Destinations (comma-separated)</span>
-                <input
-                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                  value={reviewDest}
-                  onChange={(e) => setReviewDest(e.target.value)}
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block text-xs space-y-1">
-                  <span className="text-muted-foreground">Start</span>
-                  <input
-                    className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                    value={reviewStart}
-                    onChange={(e) => setReviewStart(e.target.value)}
-                  />
-                </label>
-                <label className="block text-xs space-y-1">
-                  <span className="text-muted-foreground">End</span>
-                  <input
-                    className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                    value={reviewEnd}
-                    onChange={(e) => setReviewEnd(e.target.value)}
-                  />
-                </label>
-              </div>
-              <label className="block text-xs space-y-1">
-                <span className="text-muted-foreground">Departing from</span>
-                <input
-                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                  value={reviewOrigin}
-                  onChange={(e) => setReviewOrigin(e.target.value)}
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block text-xs space-y-1">
-                  <span className="text-muted-foreground">Travelers</span>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                    value={reviewTravelers}
-                    onChange={(e) => setReviewTravelers(e.target.value)}
-                  />
-                </label>
-                <label className="block text-xs space-y-1">
-                  <span className="text-muted-foreground">Budget (USD)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
-                    value={reviewBudget}
-                    onChange={(e) => setReviewBudget(e.target.value)}
-                  />
-                </label>
-              </div>
-              <button
-                type="button"
-                disabled={patchContext.isPending}
-                onClick={() => saveReviewEdits()}
-                className="w-full rounded-md border border-border px-3 py-2 text-sm"
-              >
-                {patchContext.isPending ? "Saving…" : "Save edits"}
-              </button>
-              <button
-                type="button"
-                disabled={
-                  postConfirm.isPending ||
-                  claimTrip.isPending ||
-                  computeMissingSlots(ctx as Record<string, unknown>).length > 0
-                }
-                onClick={handleBuildClick}
-                className="w-full rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50"
-              >
-                {postConfirm.isPending || claimTrip.isPending ? "Building…" : "Build itinerary"}
-              </button>
-            </div>
-          )}
         </aside>
       </div>
     </div>

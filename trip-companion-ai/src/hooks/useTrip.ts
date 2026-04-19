@@ -186,9 +186,12 @@ export function useSendMessage(tripId: number) {
 
   return useMutation({
     mutationFn: (message: string) => api.sendMessage(tripId, message),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["chat", tripId] });
       queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+      if (data.trip_updated) {
+        queryClient.invalidateQueries({ queryKey: ["itinerary", tripId] });
+      }
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
@@ -262,16 +265,56 @@ export function useDeleteActivity(tripId: number) {
   });
 }
 
+function parseTimeString(t: string): number {
+  const [timePart, period] = t.split(" ");
+  const [h, m] = timePart.split(":").map(Number);
+  const hour = period === "PM" && h !== 12 ? h + 12 : period === "AM" && h === 12 ? 0 : h;
+  return hour * 60 + m;
+}
+
 export function useReorderActivities(tripId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (activityIds: number[]) => api.reorderActivities(tripId, activityIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["itinerary", tripId] });
+    onMutate: async (activityIds) => {
+      await queryClient.cancelQueries({ queryKey: ["itinerary", tripId] });
+      const prev = queryClient.getQueryData<api.DayItinerary[]>(["itinerary", tripId]);
+
+      if (prev) {
+        queryClient.setQueryData<api.DayItinerary[]>(["itinerary", tripId], (old) => {
+          if (!old) return old;
+          const idSet = new Set(activityIds);
+          return old.map((day) => {
+            const inDay = day.activities.filter((a) => idSet.has(a.id));
+            if (inDay.length === 0) return day;
+
+            // Sorted time slots from current positions (API already returns in time order)
+            const sortedTimes = inDay.map((a) => a.time);
+
+            // Map new-order IDs → time slots
+            const timeMap = new Map<number, string>();
+            activityIds.forEach((id, i) => { timeMap.set(id, sortedTimes[i]); });
+
+            const updated = day.activities.map((a) =>
+              timeMap.has(a.id) ? { ...a, time: timeMap.get(a.id)! } : a
+            );
+            return {
+              ...day,
+              activities: updated.sort((a, b) => parseTimeString(a.time) - parseTimeString(b.time)),
+            };
+          });
+        });
+      }
+
+      return { prev };
     },
-    onError: (error) => {
+    onError: (error, _ids, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["itinerary", tripId], ctx.prev);
       toast.error(error instanceof Error ? error.message : "Failed to reorder activities");
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["itinerary", tripId] });
     },
   });
 }

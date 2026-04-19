@@ -7,6 +7,7 @@ export interface ChatMessage {
   role: "user" | "ai";
   text: string;
   chips?: string[];
+  isThinking?: boolean;
 }
 
 interface TripInfo {
@@ -116,7 +117,12 @@ const ChatPanel = ({
                       : "bg-chat-ai text-chat-ai-foreground rounded-bl-md"
                   }`}
                 >
-                  {renderInlineMarkdown(msg.text)}
+                  {msg.isThinking ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" aria-hidden />
+                      <span className="text-muted-foreground">Thinking...</span>
+                    </span>
+                  ) : renderInlineMarkdown(msg.text)}
                 </div>
                 {idx === lastAiIdx && afterLastAssistantMessage}
                 {showChips && idx === lastAiIdx && msg.chips && msg.chips.length > 0 && (

@@ -1,7 +1,8 @@
 """
 LangGraph orchestration for conversational trip planning:
-classify/merge context -> persist -> (prompt_extra | taste_intro | confirm_summary | reply).
-Itinerary generation runs only after explicit confirmation (see run_itinerary_generation).
+classify/merge context -> persist -> (confirm_summary | reply).
+The AI reply node drives the entire gathering phase — it decides what to ask next.
+Itinerary generation runs only after explicit user confirmation.
 """
 from __future__ import annotations
 
@@ -14,39 +15,94 @@ from sqlalchemy.orm import Session
 
 from itinerary_agent import run_itinerary_agent_with_tools
 from itinerary_gen import replace_trip_activities
-from integrations.google_places import configured as places_configured
 from llm import complete_text, llm_configured
 from models import ChatMessage, PlanningPhase, Trip
 
-# Keep enough history for multi-turn awareness (plan: last ~20 user+assistant pairs -> 40 msgs)
 MAX_TRANSCRIPT_MESSAGES = 40
-
-SKIP_EXTRA_CHIPS = (
-    "Nothing else—build my trip",
-    "Nothing else - build my trip",
-    "Build my itinerary now",
-)
 
 CONFIRM_CHIPS = frozenset(
     {
         "Confirm and build itinerary",
         "Confirm and build",
+        "Looks good — build my trip!",
+        "Looks good - build my trip!",
     }
 )
 
-CHANGE_CHIPS = frozenset(
+CHANGE_CHIPS = frozenset({"I need to change something"})
+
+# All style/preference fields the AI should gather before offering a summary.
+STYLE_FIELDS = [
+    "transportation_to",
+    "transportation_around",
+    "pace",
+    "accommodation_quality",
+    "dining_style",
+    "activity_vibe",
+    "schedule_preference",
+    "tourist_preference",
+    "must_haves",
+    "avoid",
+]
+
+# Metadata the AI uses to ask natural follow-up questions.
+_STYLE_META = [
     {
-        "I need to change something",
-    }
-)
-
-SKIP_TASTE_MESSAGES = frozenset(
+        "field": "transportation_to",
+        "label": "how they prefer to get to the destination (airline, train, etc.)",
+        "chips": ["Any airline is fine", "Prefer non-stop", "Open to trains", "I'll book myself"],
+    },
     {
-        "skip taste quiz",
-        "skip taste",
-    }
-)
+        "field": "transportation_around",
+        "label": "how they prefer to get around locally once there",
+        "chips": ["Public transit", "Rental car", "Rideshare / taxis", "Walking & biking", "Mix of everything"],
+    },
+    {
+        "field": "pace",
+        "label": "trip pace (laid-back, balanced, or jam-packed)",
+        "chips": ["Laid-back & relaxed", "Balanced", "Jam-packed"],
+    },
+    {
+        "field": "accommodation_quality",
+        "label": "accommodation quality (budget → luxury)",
+        "chips": ["Budget", "Comfortable", "Upscale", "Luxury"],
+    },
+    {
+        "field": "dining_style",
+        "label": "dining style (street food, mid-range, fine dining)",
+        "chips": ["Street food & local", "Mid-range", "Fine dining"],
+    },
+    {
+        "field": "activity_vibe",
+        "label": "activity vibe (outdoorsy, cultural, nightlife, mix)",
+        "chips": ["Outdoorsy & active", "Cultural & museums", "Nightlife & social", "Mix of everything"],
+    },
+    {
+        "field": "schedule_preference",
+        "label": "schedule preference (early bird, night owl, flexible)",
+        "chips": ["Early bird", "Night owl", "Flexible"],
+    },
+    {
+        "field": "tourist_preference",
+        "label": "off-the-beaten-path vs popular highlights",
+        "chips": ["Off the beaten path", "Popular highlights", "Mix of both"],
+    },
+    {
+        "field": "must_haves",
+        "label": "must-do experiences or bucket-list items",
+        "chips": ["Surprise me", "I'll think about it"],
+    },
+    {
+        "field": "avoid",
+        "label": "dietary restrictions, mobility needs, or things to avoid",
+        "chips": ["Nothing to avoid", "I'll mention if needed"],
+    },
+]
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _strip_json(text: str) -> str:
     text = text.strip()
@@ -59,22 +115,19 @@ def _strip_json(text: str) -> str:
 
 
 def _transcript_from_messages(messages: list[ChatMessage]) -> str:
-    lines = []
-    for m in messages[-MAX_TRANSCRIPT_MESSAGES:]:
-        lines.append(f"{m.role}: {m.content}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"{m.role}: {m.content}" for m in messages[-MAX_TRANSCRIPT_MESSAGES:]
+    )
 
 
 def _has_origin(ctx: dict) -> bool:
-    o = (ctx.get("origin") or "").strip()
-    if o:
+    if (ctx.get("origin") or "").strip():
         return True
     iata = (ctx.get("origin_iata") or "").strip().upper()
     return len(iata) >= 3
 
 
 def _format_human_date(value: str) -> str:
-    """Format ISO date strings like 2026-06-01 to 'June 1, 2026'."""
     if not value:
         return value
     try:
@@ -102,6 +155,18 @@ def compute_missing_slots(ctx: dict) -> list[str]:
     return missing
 
 
+def _missing_style_fields(ctx: dict) -> list[str]:
+    return [f for f in STYLE_FIELDS if not ctx.get(f)]
+
+
+def _all_gathered(ctx: dict) -> bool:
+    return not compute_missing_slots(ctx) and not _missing_style_fields(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Context helpers
+# ---------------------------------------------------------------------------
+
 def apply_planning_context_to_trip(trip: Trip, ctx: dict) -> None:
     trip.planning_context = ctx
     if ctx.get("destinations"):
@@ -117,7 +182,6 @@ def apply_planning_context_to_trip(trip: Trip, ctx: dict) -> None:
 
 
 def merge_planning_context(prior: dict, incoming: dict) -> dict:
-    """Merge classifier output into prior context; lists like destinations accumulate uniquely."""
     merged = dict(prior) if prior else {}
     for key, val in incoming.items():
         if val is None:
@@ -132,46 +196,51 @@ def merge_planning_context(prior: dict, incoming: dict) -> dict:
             if not isinstance(old, list):
                 old = [old]
             merged["interests"] = list(dict.fromkeys([*(old or []), *val]))
-        elif key == "taste_signals" and isinstance(val, dict):
-            merged["taste_signals"] = {
-                "liked": list(val.get("liked") or []),
-                "disliked": list(val.get("disliked") or []),
-            }
         else:
             merged[key] = val
     return merged
 
+
+# ---------------------------------------------------------------------------
+# LLM calls
+# ---------------------------------------------------------------------------
 
 def run_classifier(
     transcript: str,
     prior_context: dict,
     latest_user_message: str,
 ) -> tuple[dict, list[str], bool]:
-    """Single LLM call: merge structured planning context + gaps."""
+    """Extract and merge structured planning facts from the latest message."""
     if not llm_configured():
         merged = merge_planning_context(
             prior_context,
-            {"notes": prior_context.get("notes", "") + " " + latest_user_message},
+            {"notes": (prior_context.get("notes") or "") + " " + latest_user_message},
         )
-        missing = compute_missing_slots(merged)
-        return merged, missing, False
+        return merged, compute_missing_slots(merged), False
 
     schema_hint = """{
   "planning_context": {
-    "destinations": ["city or region names as strings"],
-    "start": "YYYY-MM-DD or null if unknown",
-    "end": "YYYY-MM-DD or null if unknown",
+    "destinations": ["city or region names"],
+    "start": "YYYY-MM-DD or null",
+    "end": "YYYY-MM-DD or null",
     "num_people": null or integer,
-    "budget": null or number USD total trip budget,
-    "origin": "home city or departure location (free text) or null",
-    "origin_iata": "3-letter departure airport code or null",
-    "interests": ["optional tags e.g. food, museums"],
+    "budget": null or number (USD total),
+    "origin": "home city or departure location or null",
+    "origin_iata": "3-letter airport code or null",
+    "interests": ["optional tags"],
+    "transportation_to": "how the user wants to get to the destination (airline preference, train, etc.) or null",
+    "transportation_around": "how the user prefers to get around locally once there or null",
     "pace": "relaxed|moderate|packed or null",
-    "transport_style": "walk_transit|rental_car|mixed or null",
-    "dietary_notes": "short string or null",
+    "accommodation_quality": "budget|comfortable|upscale|luxury or null",
+    "dining_style": "street_food|mid_range|fine_dining or null",
+    "activity_vibe": "outdoorsy|cultural|nightlife|mix or null",
+    "schedule_preference": "early_bird|night_owl|flexible or null",
+    "tourist_preference": "off_beaten_path|popular|mix or null",
+    "must_haves": "free text of must-do experiences; use \"none\" if user explicitly said nothing/no/n-a; null only if never asked",
+    "avoid": "dietary restrictions, mobility needs, or things to avoid; use \"none\" if user explicitly said nothing/no/n-a; null only if never asked",
     "notes": "short freeform constraints"
   },
-  "missing_slots": ["destinations, start, end, num_people, budget, origin — list unknowns"]
+  "missing_slots": ["list of: destinations, start, end, num_people, budget, origin — only these six"]
 }"""
 
     today_iso = datetime.now().date().isoformat()
@@ -179,25 +248,23 @@ def run_classifier(
 
     prompt = f"""You extract and merge structured TRIP FACTS from a planning conversation.
 
-Current date context (authoritative): {today_human} ({today_iso})
+Current date: {today_human} ({today_iso})
 
-Current merged planning_context (may be empty): {json.dumps(prior_context)}
-Full transcript (most recent lines may be most important):
+Current planning_context: {json.dumps(prior_context)}
+Full transcript:
 {transcript}
 
 Latest user message: "{latest_user_message}"
 
-Task:
-1) Merge any NEW facts from the latest message into planning_context. Do not drop previously known facts unless the user corrects them.
-2) For destinations, return a list of strings (multi-city trips are allowed).
-3) Infer reasonable dates only if the user gave them explicitly or clearly implied; otherwise leave start/end null.
-4) If the user gives only month/day (no year), resolve the year using the current date context above so dates are reasonable and not in the distant past.
-5) Infer num_people and budget only when stated or clearly implied; else null.
-6) origin: where the traveler departs from (city/region). origin_iata only if the user gave a 3-letter airport code explicitly.
-7) List missing_slots among: destinations, start, end, num_people, budget, origin — for anything still unknown or ambiguous.
+Rules:
+1. Merge any NEW facts into planning_context. Never drop previously known facts unless the user corrects them.
+2. destinations is always a list of strings.
+3. Infer dates only when explicitly stated or clearly implied; resolve year from current date if omitted.
+4. Extract transportation_to, transportation_around, pace, accommodation_quality, dining_style, activity_vibe, schedule_preference, tourist_preference, must_haves, avoid whenever the user expresses a preference — even if not directly asked.
+5. missing_slots covers only: destinations, start, end, num_people, budget, origin.
+6. IMPORTANT: If the assistant just asked about avoid or must_haves and the user replied with any negative ("No", "Nope", "None", "N/A", "Nothing", "No thanks", etc.), set that field to the string "none" — do NOT leave it null. null means the question was never asked; "none" means the user explicitly said nothing applies.
 
-Return JSON ONLY (no markdown) matching this shape:
-{schema_hint}"""
+Return JSON ONLY: {schema_hint}"""
 
     try:
         text = _strip_json(complete_text(prompt))
@@ -205,16 +272,12 @@ Return JSON ONLY (no markdown) matching this shape:
         incoming = data.get("planning_context") or {}
         merged = merge_planning_context(prior_context, incoming)
         model_missing = data.get("missing_slots")
-        if isinstance(model_missing, list) and model_missing:
-            missing = model_missing
-        else:
-            missing = compute_missing_slots(merged)
+        missing = model_missing if isinstance(model_missing, list) and model_missing else compute_missing_slots(merged)
         return merged, missing, False
     except Exception as e:
         print(f"Classifier error: {e}")
         merged = merge_planning_context(prior_context, {})
-        missing = compute_missing_slots(merged)
-        return merged, missing, False
+        return merged, compute_missing_slots(merged), False
 
 
 def run_planning_reply(
@@ -222,126 +285,101 @@ def run_planning_reply(
     planning_context: dict,
     missing_slots: list[str],
 ) -> tuple[str, list[str]]:
-    """Assistant reply: next question or acknowledgment."""
+    """AI-driven reply: naturally asks about whatever is most important next."""
     if not llm_configured():
-        return (
-            "Tell me where you want to go and your preferred dates.",
-            ["Suggest dates", "Surprise me"],
-        )
+        if missing_slots:
+            return "Tell me where you want to go and your preferred dates.", ["Weekend trip", "Family vacation"]
+        missing_style = _missing_style_fields(planning_context)
+        if missing_style:
+            meta = next((m for m in _STYLE_META if m["field"] == missing_style[0]), None)
+            if meta:
+                return f"One more thing — {meta['label']}?", meta["chips"]
+        return "Anything else you'd like me to know?", ["Nope, that's it"]
 
-    prompt = f"""You are a friendly travel planning assistant. The user is still gathering details for ONE trip.
+    # Build a clear picture of what's known and what's missing
+    missing_style = _missing_style_fields(planning_context)
+    style_still_needed = [
+        f"{m['label']} (field: {m['field']})"
+        for m in _STYLE_META if m["field"] in missing_style
+    ]
+    style_gathered = {
+        m["field"]: planning_context[m["field"]]
+        for m in _STYLE_META if planning_context.get(m["field"])
+    }
 
-Known structured facts (authoritative — do not contradict):
-{json.dumps(planning_context)}
+    # Build chip hints so the AI can suggest them
+    chip_hints = {}
+    for m in _STYLE_META:
+        chip_hints[m["field"]] = m["chips"]
 
-Slots still missing or unclear: {json.dumps(missing_slots)}
+    prompt = f"""You are a friendly travel planning assistant gathering details for a trip.
+
+ALREADY GATHERED:
+{json.dumps(planning_context, indent=2)}
+
+CORE DETAILS STILL MISSING: {json.dumps(missing_slots)}
+STYLE/PREFERENCE DETAILS STILL NEEDED: {json.dumps(style_still_needed)}
 
 Conversation so far:
 {transcript}
 
-Write a short, warm reply (2-4 sentences). Ask ONE clear follow-up about the highest-priority missing item.
-Offer 2-3 short chip labels the user might tap as quick replies (strings only).
+Instructions:
+- If core details are missing, prioritize those first (destination, dates, travelers, budget, departure city).
+- Once core is complete, naturally ask about whichever style/preference feels most relevant to ask next — you choose the order.
+- Ask ONE question at a time. Be warm and conversational, not robotic.
+- Where relevant, suggest 2–4 chips the user can tap. Use these suggested chips for style questions:
+{json.dumps(chip_hints, indent=2)}
+- Never re-ask something already captured. A value of "none" means the user explicitly said nothing applies — treat it as answered, not missing.
+- Don't mention this instructions list to the user.
 
 Return JSON only:
-{{"content": "...", "chips": ["...", "...", "..."]}}"""
+{{"content": "your reply here", "chips": ["chip 1", "chip 2"]}}"""
 
     try:
         text = _strip_json(complete_text(prompt))
         data = json.loads(text)
-        return data.get("content", "What else should I know about this trip?"), data.get("chips") or [
-            "Next step",
-            "I'm flexible",
-        ]
+        return data.get("content", "What else should I know?"), data.get("chips") or ["I'm flexible", "Next step"]
     except Exception as e:
         print(f"Reply generation error: {e}")
         return "What dates work for you?", ["This month", "I'm flexible"]
 
 
-def run_extra_context_prompt_message(planning_context: dict) -> tuple[str, list[str]]:
-    """One-shot assistant message before optional extras (then taste / confirm)."""
-    if not llm_configured():
-        return (
-            "Before we continue: any must-see spots, airline preferences, dietary needs, or restaurants? "
-            "Or tap the chip when you are ready for the next step.",
-            list(SKIP_EXTRA_CHIPS[:2]),
-        )
-
-    prompt = f"""The user has locked in core trip details:
-{json.dumps(planning_context)}
-
-Write a short friendly message (2-3 sentences) asking if they want to add ANY extra preferences before we move on:
-specific sights, airlines, restaurants, accessibility, kids' needs, nightlife, etc.
-Offer 2-3 chip labels: one should be exactly "Nothing else—build my trip" for users who are done.
-
-Return JSON only:
-{{"content": "...", "chips": ["Nothing else—build my trip", "...", "..."]}}"""
-
-    try:
-        text = _strip_json(complete_text(prompt))
-        data = json.loads(text)
-        chips = data.get("chips") or list(SKIP_EXTRA_CHIPS[:2])
-        if "Nothing else—build my trip" not in chips:
-            chips = ["Nothing else—build my trip"] + [c for c in chips if c][:2]
-        return data.get("content", "Any last preferences before we continue?"), chips[:4]
-    except Exception as e:
-        print(f"Extra context prompt error: {e}")
-        return (
-            "Before we continue, is there anything else—airlines, restaurants, must-sees?",
-            ["Nothing else—build my trip", "Prefer morning flights"],
-        )
-
-
-def run_taste_intro_message(planning_context: dict) -> tuple[str, list[str]]:
-    _ = planning_context
-    return (
-        "Quick taste check: rate a few sample spots so I can match your style. Use the cards below, "
-        "or skip if you prefer.",
-        ["Skip taste quiz"],
-    )
-
-
 def run_confirmation_summary_message(planning_context: dict) -> tuple[str, list[str]]:
-    chips = ["Confirm and build itinerary", "I need to change something"]
+    chips = ["Looks good — build my trip!", "I need to change something"]
     if not llm_configured():
-        lines = []
+        parts = []
         if planning_context.get("destinations"):
-            lines.append(f"- Destinations: {', '.join(planning_context['destinations'])}")
-        if planning_context.get("origin") or planning_context.get("origin_iata"):
-            lines.append(
-                f"- Departing from: {planning_context.get('origin') or ''} "
-                f"{planning_context.get('origin_iata') or ''}".strip()
-            )
+            parts.append(f"you're heading to {', '.join(planning_context['destinations'])}")
         if planning_context.get("start") and planning_context.get("end"):
-            lines.append(f"- Dates: {planning_context['start']} → {planning_context['end']}")
+            parts.append(f"from {planning_context['start']} to {planning_context['end']}")
         if planning_context.get("num_people") is not None:
-            lines.append(f"- Travelers: {planning_context['num_people']}")
+            parts.append(f"with {planning_context['num_people']} traveler(s)")
         if planning_context.get("budget") is not None:
-            lines.append(f"- Budget (USD): {planning_context['budget']}")
-        body = "\n".join(lines) if lines else "- (see notes)"
-        return (
-            f"Here is what I have:\n{body}\n\nIf this looks right, confirm to build your itinerary. "
-            f"Or tell me what to change.",
-            chips,
-        )
+            parts.append(f"on a ${int(planning_context['budget']):,} budget")
+        return "Here's what I have: " + ", ".join(parts) + ". Does this look right?", chips
 
-    prompt = f"""Summarize this trip planning context for the traveler in clear bullet points (max 8 bullets). Include destinations, dates, travelers, budget, departure origin, and any preferences or taste signals.
+    prompt = f"""Summarize this trip planning context for the traveler in a single friendly paragraph (4–6 sentences).
+Cover all known fields: destinations, departure city, dates, number of travelers, budget, transportation preference, pace, accommodation quality, dining style, activity vibe, schedule preference, local-vs-touristy preference, must-haves, and anything to avoid. Skip fields that are null or unknown.
+End by asking if this looks right and inviting them to say what to change if not.
 
 Context JSON:
 {json.dumps(planning_context)}
 
-End by asking them to confirm to build the itinerary, or say what to change.
-
 Return JSON only:
-{{"content": "markdown-friendly plain text summary", "chips": ["Confirm and build itinerary", "I need to change something"]}}"""
+{{"content": "paragraph summary", "chips": ["Looks good — build my trip!", "I need to change something"]}}"""
 
     try:
         text = _strip_json(complete_text(prompt))
         data = json.loads(text)
-        return data.get("content", "Please review your trip details."), data.get("chips") or chips
+        return data.get("content", "Here's what I have for your trip. Does this look right?"), data.get("chips") or chips
     except Exception as e:
         print(f"Confirmation summary error: {e}")
-        return "Review your trip details on the right, then confirm to build your itinerary.", chips
+        return "Here's what I have for your trip — does everything look right?", chips
 
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
 
 class PlanningState(TypedDict, total=False):
     trip_id: int
@@ -356,22 +394,9 @@ class PlanningState(TypedDict, total=False):
     itinerary_build_meta: dict[str, Any]
 
 
-def _finalize_extra_context(
-    prior: dict,
-    merged: dict,
-    user_message: str,
-) -> dict:
-    """After user answered the optional extra-context prompt, merge into extra_context."""
-    out = dict(merged)
-    u = (user_message or "").strip()
-    if u in SKIP_EXTRA_CHIPS or u.lower() in ("skip", "no", "nope", "nothing"):
-        out["extra_context"] = prior.get("extra_context") or ""
-    else:
-        old = (out.get("extra_context") or prior.get("extra_context") or "").strip()
-        out["extra_context"] = (old + "\n" + u).strip() if old else u
-    out["extra_context_prompt_sent"] = True
-    return out
-
+# ---------------------------------------------------------------------------
+# Public helpers called by main.py
+# ---------------------------------------------------------------------------
 
 def finalize_confirm_summary(db: Session, trip_id: int) -> tuple[str, list[str]]:
     trip = db.get(Trip, trip_id)
@@ -390,10 +415,6 @@ def finalize_confirm_summary(db: Session, trip_id: int) -> tuple[str, list[str]]
 
 
 def run_itinerary_generation(db: Session, trip_id: int) -> tuple[str, list[str], dict[str, Any], bool]:
-    """
-    Full itinerary build: generating phase, agent+tools, activities replace, complete.
-    Returns (assistant_content, assistant_chips, itinerary_build_meta, ok).
-    """
     trip = db.get(Trip, trip_id)
     if not trip:
         return "Trip not found.", [], {}, False
@@ -412,9 +433,12 @@ def run_itinerary_generation(db: Session, trip_id: int) -> tuple[str, list[str],
         f"{_format_human_date(trip.start)} through {_format_human_date(trip.end)}. "
         f"Open the planner to review and tweak details."
     )
-    chips = ["Sounds great"]
-    return content, chips, build_meta, True
+    return content, ["Sounds great"], build_meta, True
 
+
+# ---------------------------------------------------------------------------
+# Graph nodes
+# ---------------------------------------------------------------------------
 
 def _classify_node(state: PlanningState) -> dict[str, Any]:
     db: Session = state["db"]
@@ -424,63 +448,6 @@ def _classify_node(state: PlanningState) -> dict[str, Any]:
 
     prior = dict(trip.planning_context or {})
     user_message = state["user_message"]
-    u_low = (user_message or "").strip().lower()
-
-    # Confirming phase: merge edits; stay in review until explicit confirm via API or chip in main
-    if trip.planning_phase == PlanningPhase.confirming.value:
-        messages = (
-            db.query(ChatMessage)
-            .filter(ChatMessage.trip_id == trip.id)
-            .order_by(ChatMessage.created_at)
-            .all()
-        )
-        transcript = _transcript_from_messages(messages)
-        merged, missing, _ = run_classifier(transcript, prior, user_message)
-        merged = merge_planning_context(prior, merged)
-        merged["confirmation_status"] = "pending"
-        if user_message.strip() in CHANGE_CHIPS:
-            merged["confirmation_summary_sent"] = False
-        else:
-            merged["confirmation_summary_sent"] = prior.get("confirmation_summary_sent", True)
-        return {
-            "planning_context": merged,
-            "missing_slots": missing,
-            "ready_to_generate": False,
-        }
-
-    # Skip taste via chat
-    if (
-        prior.get("taste_calibration_status") == "pending"
-        and u_low in SKIP_TASTE_MESSAGES
-    ):
-        merged = dict(prior)
-        merged["taste_calibration_status"] = "skipped"
-        return {
-            "planning_context": merged,
-            "missing_slots": [],
-            "ready_to_generate": False,
-        }
-
-    # First reply after optional extra prompt (merge freeform extra once)
-    if (
-        prior.get("extra_context_prompt_sent")
-        and len(compute_missing_slots(prior)) == 0
-        and not prior.get("post_extra_merged")
-    ):
-        merged = dict(prior)
-        merged = _finalize_extra_context(prior, merged, user_message)
-        merged["post_extra_merged"] = True
-        if places_configured():
-            merged["taste_calibration_status"] = "pending"
-        else:
-            merged["taste_calibration_status"] = "skipped"
-        merged["taste_intro_sent"] = False
-        merged["confirmation_summary_sent"] = False
-        return {
-            "planning_context": merged,
-            "missing_slots": [],
-            "ready_to_generate": False,
-        }
 
     messages = (
         db.query(ChatMessage)
@@ -491,8 +458,13 @@ def _classify_node(state: PlanningState) -> dict[str, Any]:
     transcript = _transcript_from_messages(messages)
     merged, missing, _ = run_classifier(transcript, prior, user_message)
 
-    if prior.get("extra_context_prompt_sent"):
-        merged["extra_context_prompt_sent"] = True
+    # Confirming phase: handle edits and explicit change requests
+    if trip.planning_phase == PlanningPhase.confirming.value:
+        merged["confirmation_status"] = "pending"
+        if user_message.strip() in CHANGE_CHIPS:
+            merged["confirmation_summary_sent"] = False
+        else:
+            merged["confirmation_summary_sent"] = prior.get("confirmation_summary_sent", True)
 
     return {
         "planning_context": merged,
@@ -522,25 +494,10 @@ def _reply_node(state: PlanningState) -> dict[str, Any]:
     if trip.planning_phase == PlanningPhase.confirming.value:
         return {
             "assistant_content": (
-                "Got it — I updated your trip details. Review the summary on the right, "
-                "then confirm to build your itinerary."
+                "Got it — I've updated your trip details. Take a look at the summary above "
+                "and let me know if anything else needs changing."
             ),
-            "assistant_chips": ["Confirm and build itinerary", "I need to change something"],
-            "generated_itinerary": False,
-        }
-
-    ctx = trip.planning_context or {}
-    if (
-        ctx.get("taste_calibration_status") == "pending"
-        and ctx.get("taste_intro_sent")
-        and trip.planning_phase == PlanningPhase.gathering.value
-    ):
-        return {
-            "assistant_content": (
-                "Use the taste cards on the right to like or dislike sample places, "
-                "or tap Skip taste quiz."
-            ),
-            "assistant_chips": ["Skip taste quiz"],
+            "assistant_chips": ["Looks good — build my trip!", "I need to change something"],
             "generated_itinerary": False,
         }
 
@@ -559,106 +516,52 @@ def _reply_node(state: PlanningState) -> dict[str, Any]:
     return {"assistant_content": content, "assistant_chips": chips, "generated_itinerary": False}
 
 
-def _prompt_extra_node(state: PlanningState) -> dict[str, Any]:
-    """Ask for optional preferences; set extra_context_prompt_sent on trip."""
-    db: Session = state["db"]
-    trip = db.get(Trip, state["trip_id"])
-    if not trip:
-        return {"assistant_content": "Trip not found.", "assistant_chips": []}
-
-    ctx = dict(trip.planning_context or {})
-    ctx["extra_context_prompt_sent"] = True
-    trip.planning_context = ctx
-    db.commit()
-    db.refresh(trip)
-
-    content, chips = run_extra_context_prompt_message(ctx)
-    return {
-        "assistant_content": content,
-        "assistant_chips": chips,
-        "generated_itinerary": False,
-        "planning_context": ctx,
-    }
-
-
-def _taste_intro_node(state: PlanningState) -> dict[str, Any]:
-    db: Session = state["db"]
-    trip = db.get(Trip, state["trip_id"])
-    if not trip:
-        return {"assistant_content": "Trip not found.", "assistant_chips": []}
-
-    ctx = dict(trip.planning_context or {})
-    ctx["taste_intro_sent"] = True
-    trip.planning_context = ctx
-    apply_planning_context_to_trip(trip, ctx)
-    db.commit()
-    db.refresh(trip)
-
-    content, chips = run_taste_intro_message(ctx)
-    return {
-        "assistant_content": content,
-        "assistant_chips": chips,
-        "generated_itinerary": False,
-        "planning_context": ctx,
-    }
-
-
 def _confirm_summary_node(state: PlanningState) -> dict[str, Any]:
     db: Session = state["db"]
-    trip_id = state["trip_id"]
-    content, chips = finalize_confirm_summary(db, trip_id)
-    return {
-        "assistant_content": content,
-        "assistant_chips": chips,
-        "generated_itinerary": False,
-    }
+    content, chips = finalize_confirm_summary(db, state["trip_id"])
+    return {"assistant_content": content, "assistant_chips": chips, "generated_itinerary": False}
 
 
 def _route_after_persist(state: PlanningState) -> str:
     ctx = state.get("planning_context") or {}
     db: Session = state["db"]
     trip = db.get(Trip, state["trip_id"])
+
     if trip and trip.planning_phase == PlanningPhase.confirming.value:
-        if len(compute_missing_slots(ctx)) > 0:
+        if compute_missing_slots(ctx):
             return "reply"
         if not ctx.get("confirmation_summary_sent"):
             return "confirm_summary"
         return "reply"
-    if len(compute_missing_slots(ctx)) > 0:
+
+    # Gathering phase: ask AI to fill in missing details
+    if compute_missing_slots(ctx) or _missing_style_fields(ctx):
         return "reply"
-    if not ctx.get("extra_context_prompt_sent"):
-        return "prompt_extra"
-    if not ctx.get("post_extra_merged"):
-        return "reply"
-    if ctx.get("taste_calibration_status") == "pending" and not ctx.get("taste_intro_sent"):
-        return "taste_intro"
-    if ctx.get("taste_calibration_status") == "skipped" and not ctx.get("confirmation_summary_sent"):
+
+    # Everything gathered — present confirmation summary
+    if not ctx.get("confirmation_summary_sent"):
         return "confirm_summary"
+
     return "reply"
 
+
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
 
 def build_planning_graph():
     g = StateGraph(PlanningState)
     g.add_node("classify", _classify_node)
     g.add_node("persist", _persist_node)
     g.add_node("reply", _reply_node)
-    g.add_node("prompt_extra", _prompt_extra_node)
-    g.add_node("taste_intro", _taste_intro_node)
     g.add_node("confirm_summary", _confirm_summary_node)
     g.set_entry_point("classify")
     g.add_edge("classify", "persist")
     g.add_conditional_edges(
         "persist",
         _route_after_persist,
-        {
-            "prompt_extra": "prompt_extra",
-            "taste_intro": "taste_intro",
-            "confirm_summary": "confirm_summary",
-            "reply": "reply",
-        },
+        {"confirm_summary": "confirm_summary", "reply": "reply"},
     )
-    g.add_edge("prompt_extra", END)
-    g.add_edge("taste_intro", END)
     g.add_edge("confirm_summary", END)
     g.add_edge("reply", END)
     return g.compile()
@@ -668,23 +571,16 @@ planning_graph = build_planning_graph()
 
 
 def run_planning_turn(db: Session, trip_id: int, user_message: str) -> PlanningState:
-    """Run one planning turn after the user message has been persisted."""
-    initial: PlanningState = {
-        "trip_id": trip_id,
-        "user_message": user_message,
-        "db": db,
-    }
+    initial: PlanningState = {"trip_id": trip_id, "user_message": user_message, "db": db}
     return planning_graph.invoke(initial)
 
 
 def seed_planning_context_from_initial_request(request: str) -> dict[str, Any]:
-    """Optional one-shot merge from landing text before any chat messages exist."""
     merged, _, _ = run_classifier(f"user: {request}", {}, request)
     return merged
 
 
 def build_welcome_message(initial_request: str, planning_context: dict) -> tuple[str, list[str]]:
-    """First assistant message after POST /trips — grounded in seeded context."""
     missing = compute_missing_slots(planning_context)
     if not llm_configured():
         return (
@@ -692,28 +588,24 @@ def build_welcome_message(initial_request: str, planning_context: dict) -> tuple
             "how many travelers, approximate budget, and where you're flying from.",
             ["Weekend trip", "Family vacation", "Not sure yet"],
         )
-    prompt = f"""The user started trip planning with this message:
+    prompt = f"""The user started trip planning with:
 "{initial_request}"
 
-Extracted/planned facts so far (may be partial):
+Extracted facts so far (may be partial):
 {json.dumps(planning_context)}
 
-Missing slots still needed: {json.dumps(missing)}
+Missing core slots: {json.dumps(missing)}
 
-Write a short, warm first reply (2-3 sentences). Acknowledge what you already understood from their message, and ask for the most important missing details.
+Write a short, warm first reply (2-3 sentences). Acknowledge what you already understood and ask for the most important missing detail.
 Return JSON only: {{"content": "...", "chips": ["...", "...", "..."]}}"""
     try:
         text = _strip_json(complete_text(prompt))
         data = json.loads(text)
-        return data.get("content", "Let's plan your trip!"), data.get("chips") or [
-            "Help me pick dates",
-            "Suggest a destination",
-        ]
+        return data.get("content", "Let's plan your trip!"), data.get("chips") or ["Help me pick dates", "Suggest a destination"]
     except Exception as e:
         print(f"Welcome message error: {e}")
         return "Let's plan your trip! Where would you like to go?", ["Open to ideas", "I have dates"]
 
 
 def merge_planning_context_patch(prior: dict, patch: dict) -> dict:
-    """Merge a partial planning_context dict from PATCH (same rules as classifier merge)."""
     return merge_planning_context(prior, patch)
