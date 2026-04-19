@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabase";
 
-const API_BASE = "/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 export interface Activity {
   id: number;
@@ -50,7 +50,63 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   chips: string[] | null;
+  flight_options?: FlightOption[] | null;
+  cards?: SuggestionCard[] | null;
   created_at: string;
+}
+
+export interface FlightOption {
+  airline: string;
+  flight_number?: string | null;
+  departure_time: string;
+  arrival_time: string;
+  departure_airport?: string | null;
+  arrival_airport?: string | null;
+  duration_minutes?: number | null;
+  stops?: number | null;
+  price_usd?: number | null;
+  booking_url?: string | null;
+  tag?: string | null;
+  // Apply context (embedded by backend)
+  apply_mode?: "replace" | "add" | null;
+  replace_activity_id?: number | null;
+  replace_category?: string | null;
+  target_date?: string | null;
+}
+
+export interface SuggestionCard {
+  type: "hotel" | "tour" | "food" | "entertainment" | string;
+  title: string;
+  image_url?: string | null;
+  description?: string | null;
+  rating?: number | null;
+  estimated_price?: string | null;
+  url?: string | null;
+  location?: string | null;
+  fit_reason?: string | null;
+  // Apply context (embedded by backend)
+  apply_mode?: "replace" | "add" | null;
+  replace_activity_id?: number | null;
+  replace_category?: string | null;
+  target_date?: string | null;
+}
+
+export interface ApplySuggestionRequest {
+  apply_mode: "replace" | "add";
+  replace_activity_id?: number | null;
+  replace_category?: string | null;
+  target_date?: string | null;
+  title: string;
+  category: string;
+  location?: string | null;
+  cost?: number | null;
+  info_url?: string | null;
+  duration?: number | null;
+}
+
+export interface ApplySuggestionResult {
+  activity_id: number;
+  mode: "replaced" | "added";
 }
 
 export interface DayActivity {
@@ -308,5 +364,15 @@ export async function reorderActivities(tripId: number, activityIds: number[]): 
 export async function getAlternatives(tripId: number, activityId: number): Promise<AlternativesResponse> {
   return fetchApi<AlternativesResponse>(`/trips/${tripId}/activities/${activityId}/alternatives`, {
     method: "POST",
+  });
+}
+
+export async function applySuggestion(
+  tripId: number,
+  body: ApplySuggestionRequest
+): Promise<ApplySuggestionResult> {
+  return fetchApi<ApplySuggestionResult>(`/trips/${tripId}/suggestions/apply`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
