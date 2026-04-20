@@ -1,8 +1,9 @@
 import { useMemo, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Download, ArrowLeft, MapPin, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2, ExternalLink } from "lucide-react";
+import { Download, ArrowLeft, Utensils, Camera, Map, Bed, ShoppingBag, Music, Plane, Coffee, Loader2, ExternalLink } from "lucide-react";
 import { jsPDF } from "jspdf";
 import TopNav from "@/components/TopNav";
+import { TripMap } from "@/components/TripMap";
 import { Button } from "@/components/ui/button";
 import { useTrip, useItinerary } from "@/hooks/useTrip";
 import type { Activity } from "@/components/ItineraryPanel";
@@ -66,11 +67,6 @@ const TripSummaryPage = () => {
       .sort(([, a], [, b]) => (b as number) - (a as number)) as [Activity["category"], number][];
   }, [allActivities]);
 
-  const uniqueLocations = useMemo(() => {
-    const locs = [...new Set(allActivities.map((a) => a.location).filter(Boolean))];
-    return locs;
-  }, [allActivities]);
-
   useEffect(() => {
     if (tripData?.planning_phase === "gathering" || tripData?.planning_phase === "confirming") {
       navigate(`/planning/${tripId}`, { replace: true });
@@ -93,117 +89,174 @@ const TripSummaryPage = () => {
     };
 
     // ── Header bar ──────────────────────────────────────────────────────────
-    doc.setFillColor(15, 118, 110); // teal-700
-    doc.rect(0, 0, PAGE_W, 72, "F");
+    doc.setFillColor(15, 118, 110);
+    doc.rect(0, 0, PAGE_W, 80, "F");
 
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.text(`Trip to ${trip.destination}`, MARGIN, 32);
+    doc.setFontSize(24);
+    doc.text(`Trip to ${trip.destination}`, MARGIN, 36);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(11);
+    doc.setTextColor(204, 240, 234);
     doc.text(
-      `${trip.startDate}  –  ${trip.endDate}   ·   ${trip.travelers} traveler${trip.travelers !== 1 ? "s" : ""}   ·   Budget $${trip.budget.toLocaleString()}`,
+      `${trip.startDate}  -  ${trip.endDate}   *   ${trip.travelers} traveler${trip.travelers !== 1 ? "s" : ""}   *   Budget $${trip.budget.toLocaleString()}`,
       MARGIN,
-      52,
+      58,
     );
 
-    y = 96;
+    y = 104;
 
     // ── Daily schedule ───────────────────────────────────────────────────────
-    const categoryEmoji: Record<string, string> = {
-      flight: "✈", hotel: "🏨", food: "🍽", cafe: "☕",
-      sightseeing: "📷", transport: "🗺", shopping: "🛍", entertainment: "🎵",
+    const categoryShort: Record<string, string> = {
+      flight: "FLT", hotel: "HTL", food: "EAT", cafe: "CAF",
+      sightseeing: "SEE", transport: "TRN", shopping: "SHP", entertainment: "ENT",
     };
 
     days.forEach((d) => {
-      checkPage(52);
+      checkPage(56);
 
-      // Day header
-      doc.setFillColor(240, 253, 250); // teal-50
-      doc.roundedRect(MARGIN, y, CONTENT_W, 26, 4, 4, "F");
+      // Day header with left accent bar
+      doc.setFillColor(240, 253, 250);
+      doc.roundedRect(MARGIN, y, CONTENT_W, 28, 4, 4, "F");
+      doc.setFillColor(15, 118, 110);
+      doc.rect(MARGIN, y, 4, 28, "F");
+
       doc.setTextColor(15, 118, 110);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(11);
-      doc.text(`Day ${d.day}`, MARGIN + 10, y + 17);
+      doc.text(`Day ${d.day}`, MARGIN + 14, y + 18);
       doc.setFont("helvetica", "normal");
-      doc.setTextColor(100, 116, 139); // slate-500
-      doc.text(d.date, MARGIN + 52, y + 17);
-      y += 34;
+      doc.setTextColor(100, 116, 139);
+      doc.text(d.date, MARGIN + 60, y + 18);
+      y += 36;
 
-      d.activities.forEach((a) => {
-        checkPage(22);
-        const emoji = categoryEmoji[a.category] ?? "•";
-        const label = `${emoji}  ${a.time}   ${a.name}`;
-        const costStr = `$${a.cost}`;
+      d.activities.forEach((a, idx) => {
+        const hasLocation = !!a.location;
+        const rowH = hasLocation ? 36 : 24;
+        checkPage(rowH + 2);
 
-        doc.setTextColor(30, 41, 59); // slate-800
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(10);
-
-        // Truncate name if needed so it doesn't overlap the cost column
-        const costW = doc.getTextWidth(costStr) + 8;
-        const labelLines = doc.splitTextToSize(label, CONTENT_W - costW - 8);
-        const lineH = 14;
-        doc.text(labelLines, MARGIN + 8, y + lineH);
-
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(15, 118, 110);
-        doc.text(costStr, MARGIN + CONTENT_W - costW + 8, y + lineH, { align: "right" });
-
-        if (a.location) {
-          doc.setFont("helvetica", "normal");
-          doc.setFontSize(8.5);
-          doc.setTextColor(148, 163, 184); // slate-400
-          doc.text(a.location, MARGIN + 8, y + lineH + 11);
-          y += 13;
+        // Subtle alternating row tint
+        if (idx % 2 === 0) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(MARGIN, y, CONTENT_W, rowH, "F");
         }
 
-        y += lineH + 5;
+        const midY = y + 15;
+        const costStr = `$${a.cost.toLocaleString()}`;
+
+        // Category badge
+        const short = categoryShort[a.category] ?? "   ";
+        doc.setFillColor(204, 240, 234);
+        doc.roundedRect(MARGIN + 6, y + 5, 26, 13, 2, 2, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7);
+        doc.setTextColor(15, 118, 110);
+        doc.text(short, MARGIN + 8, y + 14);
+
+        // Time
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(100, 116, 139);
+        doc.text(a.time, MARGIN + 38, midY);
+
+        // Name
+        const costW = doc.getTextWidth(costStr) + 12;
+        const nameMaxW = CONTENT_W - 105 - costW;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10.5);
+        doc.setTextColor(30, 41, 59);
+        const nameLines = doc.splitTextToSize(a.name, nameMaxW);
+        doc.text(nameLines[0], MARGIN + 100, midY);
+
+        // Cost
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10.5);
+        doc.setTextColor(15, 118, 110);
+        doc.text(costStr, MARGIN + CONTENT_W - 4, midY, { align: "right" });
+
+        if (hasLocation) {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8.5);
+          doc.setTextColor(148, 163, 184);
+          const locMaxW = CONTENT_W - 105 - costW;
+          const locLines = doc.splitTextToSize(a.location, locMaxW);
+          doc.text(locLines[0], MARGIN + 100, midY + 13);
+        }
+
+        // Thin separator line
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.3);
+        doc.line(MARGIN, y + rowH, MARGIN + CONTENT_W, y + rowH);
+
+        y += rowH;
       });
 
-      y += 10;
-    });
-
-    // ── Cost breakdown ────────────────────────────────────────────────────────
-    checkPage(60 + costByCategory.length * 18);
-
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.5);
-    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
-    y += 18;
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.setTextColor(15, 118, 110);
-    doc.text("Cost Breakdown", MARGIN, y);
-    y += 16;
-
-    costByCategory.forEach(([cat, cost]) => {
-      checkPage(16);
-      const label = categoryLabels[cat] ?? cat;
-      const pct = totalCost > 0 ? Math.round((cost / totalCost) * 100) : 0;
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.setTextColor(30, 41, 59);
-      doc.text(`${label}`, MARGIN + 8, y);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`${pct}%`, MARGIN + 130, y);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(15, 118, 110);
-      doc.text(`$${cost}`, MARGIN + CONTENT_W, y, { align: "right" });
       y += 16;
     });
 
-    y += 6;
-    doc.setDrawColor(226, 232, 240);
+    // ── Cost breakdown ────────────────────────────────────────────────────────
+    checkPage(56 + costByCategory.length * 26 + 44);
+
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.75);
     doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
-    y += 14;
+    y += 20;
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
+    doc.setFontSize(13);
+    doc.setTextColor(15, 118, 110);
+    doc.text("Cost Breakdown", MARGIN, y);
+    y += 22;
+
+    const BAR_X = MARGIN + 155;
+    const BAR_W = 180;
+    const BAR_H = 6;
+
+    costByCategory.forEach(([cat, cost]) => {
+      checkPage(26);
+      const label = categoryLabels[cat] ?? cat;
+      const pct = totalCost > 0 ? cost / totalCost : 0;
+
+      // Dot
+      doc.setFillColor(15, 118, 110);
+      doc.circle(MARGIN + 6, y - 2, 3, "F");
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(30, 41, 59);
+      doc.text(label, MARGIN + 16, y);
+
+      // Progress bar track
+      doc.setFillColor(226, 232, 240);
+      doc.roundedRect(BAR_X, y - 8, BAR_W, BAR_H, 3, 3, "F");
+      // Progress bar fill
+      if (pct > 0) {
+        doc.setFillColor(15, 118, 110);
+        doc.roundedRect(BAR_X, y - 8, BAR_W * pct, BAR_H, 3, 3, "F");
+      }
+
+      doc.setFontSize(9);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`${Math.round(pct * 100)}%`, BAR_X + BAR_W + 8, y);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.setTextColor(15, 118, 110);
+      doc.text(`$${cost.toLocaleString()}`, MARGIN + CONTENT_W, y, { align: "right" });
+
+      y += 24;
+    });
+
+    y += 6;
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
+    y += 16;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
     doc.setTextColor(30, 41, 59);
     doc.text("Total", MARGIN + 8, y);
     doc.setTextColor(15, 118, 110);
@@ -213,8 +266,8 @@ const TripSummaryPage = () => {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(148, 163, 184);
-    const budgetNote = totalCost <= trip.budget ? "Under budget ✓" : "Over budget ⚠";
-    doc.text(`Budget: $${trip.budget.toLocaleString()}  ·  ${budgetNote}`, MARGIN + 8, y);
+    const budgetNote = totalCost <= trip.budget ? "Under budget" : "Over budget";
+    doc.text(`Budget: $${trip.budget.toLocaleString()}  *  ${budgetNote}`, MARGIN + 8, y);
 
     // ── Footer on every page ──────────────────────────────────────────────────
     const pageCount = doc.getNumberOfPages();
@@ -223,7 +276,7 @@ const TripSummaryPage = () => {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184);
-      doc.text(`TripLogic  ·  Page ${i} of ${pageCount}`, PAGE_W / 2, PAGE_H - 20, { align: "center" });
+      doc.text(`TripLogic  *  Page ${i} of ${pageCount}`, PAGE_W / 2, PAGE_H - 20, { align: "center" });
     }
 
     doc.save(`${trip.destination.replace(/[^a-z0-9]/gi, "-")}-itinerary.pdf`);
@@ -266,7 +319,7 @@ const TripSummaryPage = () => {
       <TopNav />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="max-w-6xl mx-auto px-4 py-8">
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
@@ -286,9 +339,9 @@ const TripSummaryPage = () => {
             </Button>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)] gap-6">
             {/* Itinerary */}
-            <div className="md:col-span-2 space-y-6">
+            <div className="space-y-6">
               {days.length === 0 ? (
                 <div className="bg-card border border-border rounded-2xl p-5 text-center text-muted-foreground">
                   No activities planned yet
@@ -365,22 +418,14 @@ const TripSummaryPage = () => {
                 </p>
               </div>
 
-              {/* Map placeholder with pins */}
+              {/* Map */}
               <div className="bg-card border border-border rounded-2xl p-5">
                 <h3 className="font-semibold text-foreground mb-3">Locations</h3>
-                <div className="relative bg-secondary rounded-xl h-48 flex items-center justify-center mb-3 overflow-hidden">
-                  <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_30%_40%,hsl(var(--primary)),transparent_50%),radial-gradient(circle_at_70%_60%,hsl(var(--primary)),transparent_50%)]" />
-                  <Map size={32} className="text-muted-foreground/40" />
-                  <span className="absolute bottom-2 right-2 text-[10px] text-muted-foreground">Map coming soon</span>
-                </div>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                  {uniqueLocations.map((loc) => (
-                    <div key={loc} className="flex items-center gap-2 text-xs text-foreground">
-                      <MapPin size={12} className="text-primary shrink-0" />
-                      <span className="truncate">{loc}</span>
-                    </div>
-                  ))}
-                </div>
+                <TripMap
+                  activities={allActivities
+                    .filter((a) => !!a.location)
+                    .map((a) => ({ name: a.name, time: a.time, location: a.location }))}
+                />
               </div>
             </div>
           </div>
