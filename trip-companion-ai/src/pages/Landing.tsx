@@ -26,9 +26,6 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { getProfile } from "@/services/api";
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-const YOUTUBE_VIDEO_ID = "dQw4w9WgXcQ"; // ← replace with your video ID
-
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const formatDateRange = (start: string, end: string) => {
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
@@ -894,12 +891,13 @@ function VideoDemo({ dark, C }: { dark: boolean; C: Colors }) {
             transition: "box-shadow 0.35s, border-color 0.35s",
           }}
         >
-          <iframe
-            src={`https://www.youtube.com/embed/${YOUTUBE_VIDEO_ID}?rel=0&modestbranding=1`}
+          <video
+            src="/videos/landing-demo.mp4"
             title="TripLogic Demo"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }}
+            controls
+            playsInline
+            preload="metadata"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
         </div>
       </div>
